@@ -12,6 +12,7 @@ The reusable subprocess transport is the versioned
 - [Architecture](Architecture.md)
 - [Development](docs/development.md)
 - [Studio protocol](docs/protocol.md)
+- [Amoo test file format](docs/test-format.md)
 - [Release packaging](docs/releases.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)

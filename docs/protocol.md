@@ -13,6 +13,11 @@ Current methods:
 | --- | --- |
 | `system.handshake` | Product version, protocol version, capabilities |
 | `system.health` | Backend readiness |
+| `devices.list` | Discover running and available simulators, emulators, and devices |
+| `devices.start` | Start a selected simulator or emulator |
+| `apps.buildInstallRun` | Build, install, and launch an app on the selected target |
+| `apps.reinstallRun` | Reinstall the last build artifact without rebuilding |
+| `apps.resetData` | Erase app data after explicit Studio approval |
 
-Device, chat, session, report, and approval methods will be added to the Swift-owned protocol. Their
+Chat, session, and report methods will be added to the Swift-owned protocol. Their
 Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.

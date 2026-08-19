@@ -19,6 +19,17 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import java.awt.FileDialog
+import java.awt.Frame
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
+import java.io.File
+import java.util.prefs.Preferences
+import javax.swing.JFileChooser
 
 @Serializable
 private data class Handshake(
@@ -28,11 +39,15 @@ private data class Handshake(
 	val capabilities: List<String>,
 )
 
+@Serializable private data class DeviceListResult(val devices: List<StudioDevice>)
+@Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
+
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
 ) : AutoCloseable {
-	val state = MutableStateFlow(StudioState())
-	private val json = Json { ignoreUnknownKeys = true }
+	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
+	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+	val state = MutableStateFlow(StudioState(providers = loadProviders()))
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
@@ -43,8 +58,8 @@ private class StudioController(
 			client.state.collect { processState ->
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
-					is ProcessRpcState.Unavailable -> state.value = StudioState(ConnectionState.Unavailable(processState.reason))
-					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = StudioState()
+					is ProcessRpcState.Unavailable -> state.value = state.value.copy(connection = ConnectionState.Unavailable(processState.reason))
+					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.copy(connection = ConnectionState.Starting)
 				}
 			}
 		}
@@ -53,19 +68,141 @@ private class StudioController(
 	private suspend fun handshake() {
 		try {
 			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
-			state.value = StudioState(ConnectionState.Ready(handshake.version, handshake.protocolVersion, handshake.capabilities))
+			state.value = state.value.copy(connection = ConnectionState.Ready(handshake.version, handshake.protocolVersion, handshake.capabilities))
 		} catch (error: Exception) {
-			state.value = StudioState(ConnectionState.Unavailable(error.message ?: "Handshake failed"))
+			state.value = state.value.copy(connection = ConnectionState.Unavailable(error.message ?: "Handshake failed"))
 		}
 	}
 
 	fun onEvent(event: StudioEvent) {
+		val approvedAction = state.value.pendingApproval?.action
 		state.value = state.value.reduce(event)
-		if (event == StudioEvent.RetryConnection) {
-			client.close()
-			client.start()
+		when (event) {
+			StudioEvent.RetryConnection -> { client.close(); client.start() }
+			StudioEvent.OpenTest -> openTest()
+			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
+			StudioEvent.SaveTestAs -> saveTest(forcePicker = true)
+			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
+			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
+			StudioEvent.RefreshDevices -> refreshDevices()
+			is StudioEvent.SelectSection -> if (event.section == StudioSection.Devices && state.value.devices.isEmpty()) refreshDevices()
+			is StudioEvent.StartDevice -> runDeviceOperation("Starting device…", "devices.start", buildJsonObject { put("id", event.id) }, refreshAfter = true)
+			StudioEvent.ChooseProjectPath -> chooseProjectPath()
+			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
+			StudioEvent.ReinstallAndRun -> reinstallAndRun()
+			is StudioEvent.ResolveApproval -> if (event.approved && approvedAction == ApprovedAction.ResetAppData) resetAppData()
+			else -> Unit
 		}
 	}
+
+	private fun refreshDevices() = scope.launch {
+		runCatching { json.decodeFromJsonElement<DeviceListResult>(client.call("devices.list")) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.DevicesLoaded(it.devices)) }
+			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Device discovery failed: ${it.message}") }
+	}
+
+	private fun chooseProjectPath() {
+		val chooser = JFileChooser().apply {
+			dialogTitle = "Choose Xcode project, workspace, or Gradle project"
+			fileSelectionMode = JFileChooser.FILES_AND_DIRECTORIES
+		}
+		if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+			state.value = state.value.reduce(StudioEvent.ChangeProjectPath(chooser.selectedFile.absolutePath))
+		}
+	}
+
+	private fun buildInstallAndRun() {
+		val snapshot = state.value
+		val device = snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId } ?: return
+		runDeviceOperation("Building and installing…", "apps.buildInstallRun", buildJsonObject {
+			put("deviceId", device.id); put("platform", device.platform.name.lowercase()); put("projectPath", snapshot.projectPath)
+			put("appId", snapshot.appId); put("schemeOrModule", snapshot.schemeOrModule)
+		})
+	}
+
+	private fun reinstallAndRun() {
+		val snapshot = state.value
+		val artifact = snapshot.lastBuildArtifact ?: return
+		runDeviceOperation("Reinstalling app…", "apps.reinstallRun", buildJsonObject {
+			put("deviceId", snapshot.selectedDeviceId ?: return); put("appId", snapshot.appId); put("artifactPath", artifact)
+		})
+	}
+
+	private fun resetAppData() {
+		val snapshot = state.value
+		runDeviceOperation("Erasing app data…", "apps.resetData", buildJsonObject {
+			put("deviceId", snapshot.selectedDeviceId ?: return); put("appId", snapshot.appId); snapshot.lastBuildArtifact?.let { put("artifactPath", it) }
+		})
+	}
+
+	private fun runDeviceOperation(message: String, method: String, params: kotlinx.serialization.json.JsonObject, refreshAfter: Boolean = false) {
+		state.value = state.value.reduce(StudioEvent.DeviceOperationStarted(message))
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<OperationResult>(client.call(method, params)) }
+				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.DeviceOperationFinished(result.message, result.artifactPath)); if (refreshAfter) refreshDevices() }
+				.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Operation failed: ${it.message}") }
+		}
+	}
+
+	private fun openTest() {
+		val file = chooseFile(FileDialog.LOAD, "Open Amoo test", "*.amootest") ?: return
+		runCatching {
+			json.decodeFromString<AmooTest>(file.readText()).also {
+				require(it.formatVersion == 1) { "Unsupported .amootest format version ${it.formatVersion}" }
+			}
+		}
+			.onSuccess { state.value = state.value.reduce(StudioEvent.TestLoaded(it, file.absolutePath)) }
+			.onFailure { state.value = state.value.copy(notice = "Could not open test: ${it.message}") }
+	}
+
+	private fun saveTest(forcePicker: Boolean) {
+		val existing = state.value.testPath?.let(::File)
+		var file = if (forcePicker) chooseFile(FileDialog.SAVE, "Save Amoo test", "${safeFileName(state.value.test.name)}.amootest") else existing
+		if (file == null) return
+		if (file.extension.lowercase() != "amootest") file = File(file.parentFile, "${file.name}.amootest")
+		runCatching { file.writeText(json.encodeToString(state.value.test)) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.TestSaved(file.absolutePath)) }
+			.onFailure { state.value = state.value.copy(notice = "Could not save test: ${it.message}") }
+	}
+
+	private fun chooseFile(mode: Int, title: String, initialFile: String): File? {
+		val dialog = FileDialog(null as Frame?, title, mode)
+		dialog.file = initialFile
+		dialog.isVisible = true
+		val selected = dialog.file?.let { File(dialog.directory, it) }
+		dialog.dispose()
+		return selected
+	}
+
+	private fun copyMcpConfiguration() {
+		val executable = runCatching { BundledBinaryLocator("amoo", "AMOO_BINARY").locate() }.getOrElse {
+			state.value = state.value.copy(notice = "Could not locate Amoo: ${it.message}")
+			return
+		}
+		val configuration = """
+			{
+			  "mcpServers": {
+			    "amoo": {
+			      "command": ${json.encodeToString(executable)},
+			      "args": ["mcp", "serve"]
+			    }
+			  }
+			}
+		""".trimIndent()
+		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(configuration), null)
+		state.value = state.value.copy(notice = "MCP configuration copied")
+	}
+
+	private fun loadProviders(): List<ProviderProfile> = runCatching {
+		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
+	}.getOrNull() ?: defaultProviders()
+
+	private fun persistProviders() {
+		runCatching { preferences.put("providers", json.encodeToString(state.value.providers)) }
+			.onFailure { state.value = state.value.copy(notice = "Could not save providers: ${it.message}") }
+	}
+
+	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
 	override fun close() = client.close()
 }

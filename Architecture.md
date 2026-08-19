@@ -6,6 +6,9 @@ Amoo Studio owns Compose UI, presentation state, desktop packaging, and user pre
 Swift Amoo executable owns device automation, companion management, MCP tools, model integration,
 sessions, reports, and artifacts.
 
+Studio owns the versioned `.amootest` presentation format and provider profile preferences. Profiles
+contain endpoints, model names, and secret environment-variable names, but never API key values.
+
 Studio launches `amoo studio serve` and communicates through versioned JSON-RPC over framed stdio.
 The GUI never parses human-oriented CLI output.
 

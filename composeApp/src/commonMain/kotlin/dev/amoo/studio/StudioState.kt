@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Immutable
 data class StudioState(
+	val hostPlatform: HostPlatform = HostPlatform.MacOS,
 	val connection: ConnectionState = ConnectionState.Starting,
 	val section: StudioSection = StudioSection.Overview,
 	val test: AmooTest = AmooTest(),
@@ -23,6 +24,12 @@ data class StudioState(
 	val pendingApproval: PendingApproval? = null,
 )
 
+enum class HostPlatform(val label: String) {
+	MacOS("macOS"),
+	Linux("Linux"),
+	Unsupported("Unsupported host"),
+}
+
 enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Reports("Reports"), Settings("Settings") }
 
 @Serializable
@@ -32,9 +39,14 @@ data class AmooTest(
 	val description: String = "",
 	val platform: TestPlatform = TestPlatform.Ios,
 	val steps: List<TestStep> = listOf(TestStep(id = "step-1")),
+	val requirements: TestRequirements? = null,
+	val compiledPlan: CompiledToolPlan? = null,
+	val metadata: Map<String, String> = emptyMap(),
 )
 
 @Serializable data class TestStep(val id: String, val instruction: String = "", val expected: String = "")
+@Serializable data class TestRequirements(val appId: String? = null, val projectPath: String? = null, val deviceName: String? = null)
+@Serializable data class CompiledToolPlan(val compiler: String, val compilerVersion: String, val operations: List<String>)
 @Serializable enum class TestPlatform(val label: String) { Ios("iOS"), Android("Android") }
 
 @Serializable
@@ -64,7 +76,7 @@ sealed interface DeviceOperation { data object Idle : DeviceOperation; data clas
 data class PendingApproval(val title: String, val message: String, val action: ApprovedAction)
 sealed interface ApprovedAction { data object ResetAppData : ApprovedAction }
 
-fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.5"))
+fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.8:27b-mlx"))
 
 sealed interface StudioEvent {
 	data class SelectSection(val section: StudioSection) : StudioEvent
@@ -105,7 +117,7 @@ sealed interface StudioEvent {
 fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
-	StudioEvent.NewTest -> copy(test = AmooTest(), testPath = null, isTestDirty = false, section = StudioSection.Tests)
+	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
 	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration -> this
 	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = "Opened ${event.path}")
 	is StudioEvent.TestSaved -> copy(testPath = event.path, isTestDirty = false, notice = "Saved ${event.path}")
@@ -140,3 +152,15 @@ sealed interface ConnectionState {
 	data class Ready(val version: String, val protocolVersion: Int, val capabilities: List<String>) : ConnectionState
 	data class Unavailable(val reason: String) : ConnectionState
 }
+
+val HostPlatform.defaultTestPlatform: TestPlatform
+	get() = if (this == HostPlatform.Linux) TestPlatform.Android else TestPlatform.Ios
+
+fun HostPlatform.supports(platform: TestPlatform): Boolean = when (this) {
+	HostPlatform.MacOS -> true
+	HostPlatform.Linux -> platform == TestPlatform.Android
+	HostPlatform.Unsupported -> false
+}
+
+fun ConnectionState.supports(capability: String): Boolean =
+	this is ConnectionState.Ready && capability in capabilities

@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="0. Studio Debug" type="Application" factoryName="Application" folderName="Studio">
+    <option name="MAIN_CLASS_NAME" value="dev.amoo.studio.MainKt" />
+    <module name="amoo-studio.composeApp.desktopMain" />
+    <option name="PROGRAM_PARAMETERS" value="" />
+    <option name="VM_PARAMETERS" value="-Dorg.slf4j.simpleLogger.log.dev.amoo.studio=debug -Dstudio.debug.failFast=true" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

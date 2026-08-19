@@ -17,6 +17,7 @@ kotlin {
 				implementation(libs.compose.runtime)
 				implementation(libs.compose.foundation)
 				implementation(compose.material3)
+				implementation(compose.components.resources)
 				implementation(libs.compose.ui)
 				implementation(libs.coroutines.core)
 				implementation(libs.kotlinx.serialization.json)
@@ -39,7 +40,7 @@ compose.desktop {
 	application {
 		mainClass = "dev.amoo.studio.MainKt"
 		nativeDistributions {
-			targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
+			targetFormats(TargetFormat.Dmg, TargetFormat.Pkg, TargetFormat.Deb, TargetFormat.Rpm)
 			packageName = "Amoo Studio"
 			packageVersion = "0.1.0"
 			description = "Desktop client for Amoo mobile testing"
@@ -49,6 +50,7 @@ compose.desktop {
 				bundleID = "dev.amoo.studio"
 				appCategory = "public.app-category.developer-tools"
 				minimumSystemVersion = "15.0"
+				iconFile.set(project.file("app-resources/icon.icns"))
 			}
 		}
 	}

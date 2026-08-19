@@ -2,10 +2,13 @@ package dev.amoo.studio
 
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.painterResource
+import org.jetbrains.compose.resources.painterResource
+import dev.amoo.composeapp.generated.resources.Res
+import dev.amoo.composeapp.generated.resources.icon_512
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -26,10 +29,13 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.Image
+import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.util.prefs.Preferences
+import javax.imageio.ImageIO
 import javax.swing.JFileChooser
 
 @Serializable
@@ -231,6 +237,22 @@ private fun detectHostPlatform(): HostPlatform {
 	}
 }
 
+private fun installDockIcon() {
+	val icon: Image = runCatching {
+		Thread.currentThread().contextClassLoader
+			.getResourceAsStream("icons/icon.png")
+			?.use(ImageIO::read)
+	}.getOrNull() ?: return
+	runCatching {
+		if (Taskbar.isTaskbarSupported()) {
+			val taskbar = Taskbar.getTaskbar()
+			if (taskbar.isSupported(Taskbar.Feature.ICON_IMAGE)) {
+				taskbar.iconImage = icon
+			}
+		}
+	}
+}
+
 fun main() = application {
 	val controller = remember { StudioController() }
 	DisposableEffect(controller) {
@@ -242,9 +264,12 @@ fun main() = application {
 			exitApplication()
 		},
 		title = "Amoo Studio",
-		icon = painterResource("icon_512.png"),
+		icon = painterResource(Res.drawable.icon_512),
 		state = rememberWindowState(width = 960.dp, height = 680.dp),
 	) {
+		LaunchedEffect(Unit) {
+			installDockIcon()
+		}
 		AmooStudioApp(state, controller::onEvent)
 	}
 }

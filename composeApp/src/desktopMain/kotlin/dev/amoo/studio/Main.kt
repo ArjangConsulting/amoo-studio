@@ -5,6 +5,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -47,7 +48,7 @@ private class StudioController(
 ) : AutoCloseable {
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
-	val state = MutableStateFlow(StudioState(providers = loadProviders()))
+	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), providers = loadProviders()))
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
@@ -96,6 +97,7 @@ private class StudioController(
 	}
 
 	private fun refreshDevices() = scope.launch {
+		if (!requireCapability("devices.list")) return@launch
 		runCatching { json.decodeFromJsonElement<DeviceListResult>(client.call("devices.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.DevicesLoaded(it.devices)) }
 			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Device discovery failed: ${it.message}") }
@@ -112,6 +114,7 @@ private class StudioController(
 	}
 
 	private fun buildInstallAndRun() {
+		if (!requireCapability("apps.buildInstallRun")) return
 		val snapshot = state.value
 		val device = snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId } ?: return
 		runDeviceOperation("Building and installing…", "apps.buildInstallRun", buildJsonObject {
@@ -121,6 +124,7 @@ private class StudioController(
 	}
 
 	private fun reinstallAndRun() {
+		if (!requireCapability("apps.reinstallRun")) return
 		val snapshot = state.value
 		val artifact = snapshot.lastBuildArtifact ?: return
 		runDeviceOperation("Reinstalling app…", "apps.reinstallRun", buildJsonObject {
@@ -129,6 +133,7 @@ private class StudioController(
 	}
 
 	private fun resetAppData() {
+		if (!requireCapability("apps.resetData")) return
 		val snapshot = state.value
 		runDeviceOperation("Erasing app data…", "apps.resetData", buildJsonObject {
 			put("deviceId", snapshot.selectedDeviceId ?: return); put("appId", snapshot.appId); snapshot.lastBuildArtifact?.let { put("artifactPath", it) }
@@ -136,6 +141,7 @@ private class StudioController(
 	}
 
 	private fun runDeviceOperation(message: String, method: String, params: kotlinx.serialization.json.JsonObject, refreshAfter: Boolean = false) {
+		if (!requireCapability(method)) return
 		state.value = state.value.reduce(StudioEvent.DeviceOperationStarted(message))
 		scope.launch {
 			runCatching { json.decodeFromJsonElement<OperationResult>(client.call(method, params)) }
@@ -202,9 +208,27 @@ private class StudioController(
 			.onFailure { state.value = state.value.copy(notice = "Could not save providers: ${it.message}") }
 	}
 
+	private fun requireCapability(capability: String): Boolean {
+		if (state.value.connection.supports(capability)) return true
+		state.value = state.value.copy(
+			deviceOperation = DeviceOperation.Idle,
+			notice = "The connected Amoo version does not support $capability",
+		)
+		return false
+	}
+
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
 	override fun close() = client.close()
+}
+
+private fun detectHostPlatform(): HostPlatform {
+	val osName = System.getProperty("os.name").orEmpty().lowercase()
+	return when {
+		"mac" in osName || "darwin" in osName -> HostPlatform.MacOS
+		"linux" in osName -> HostPlatform.Linux
+		else -> HostPlatform.Unsupported
+	}
 }
 
 fun main() = application {
@@ -218,6 +242,7 @@ fun main() = application {
 			exitApplication()
 		},
 		title = "Amoo Studio",
+		icon = painterResource("icon_512.png"),
 		state = rememberWindowState(width = 960.dp, height = 680.dp),
 	) {
 		AmooStudioApp(state, controller::onEvent)

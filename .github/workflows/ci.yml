@@ -39,6 +39,12 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v5
       - run: ./gradlew :composeApp:packageDmg :composeApp:packagePkg
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: macos-packaging-logs
+          path: composeApp/build/compose/logs/
+          if-no-files-found: ignore
 
   package-linux:
     runs-on: ubuntu-24.04
@@ -50,3 +56,9 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v5
       - run: ./gradlew :composeApp:packageDeb
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-packaging-logs
+          path: composeApp/build/compose/logs/
+          if-no-files-found: ignore

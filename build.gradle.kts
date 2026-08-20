@@ -9,5 +9,5 @@ plugins {
 
 allprojects {
 	group = "dev.amoo"
-	version = "0.1.0-SNAPSHOT"
+	version = providers.gradleProperty("studioVersion").orElse("1.0.0-SNAPSHOT").get()
 }

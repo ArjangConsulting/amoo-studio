@@ -64,7 +64,7 @@ compose.desktop {
 		nativeDistributions {
 			targetFormats(TargetFormat.Dmg, TargetFormat.Pkg, TargetFormat.Deb, TargetFormat.Rpm)
 			packageName = "Amoo Studio"
-			packageVersion = "0.1.0"
+			packageVersion = project.version.toString().substringBefore('-')
 			description = "Desktop client for Amoo mobile testing"
 			vendor = "Amoo"
 			appResourcesRootDir.set(project.layout.projectDirectory.dir("app-resources/$packagingOs-$packagingArch"))

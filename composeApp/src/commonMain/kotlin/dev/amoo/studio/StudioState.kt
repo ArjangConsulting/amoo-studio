@@ -13,6 +13,7 @@ data class StudioState(
 	val testPath: String? = null,
 	val isTestDirty: Boolean = false,
 	val testExecution: TestExecution = TestExecution.Idle,
+	val operationDraft: ToolOperationDraft = ToolOperationDraft(),
 	val lastSessionId: String? = null,
 	val lastReportId: String? = null,
 	val reports: List<TestReport> = emptyList(),
@@ -66,7 +67,41 @@ data class AmooTest(
 
 @Serializable data class TestStep(val id: String, val instruction: String = "", val expected: String = "")
 @Serializable data class TestRequirements(val appId: String? = null, val projectPath: String? = null, val deviceName: String? = null)
-@Serializable data class CompiledToolPlan(val compiler: String, val compilerVersion: String, val operations: List<String>)
+@Serializable
+data class CompiledToolPlan(
+	val compiler: String,
+	val compilerVersion: String,
+	val operations: List<String> = emptyList(),
+	val toolOperations: List<ToolOperation> = emptyList(),
+)
+
+@Serializable data class ToolOperation(val id: String, val tool: String, val arguments: Map<String, String> = emptyMap())
+data class ToolOperationDraft(val tool: String = TOOL_CATALOG.first().name, val arguments: Map<String, String> = emptyMap())
+data class ToolDefinition(val name: String, val description: String, val arguments: List<ToolArgument> = emptyList())
+data class ToolArgument(val name: String, val label: String, val required: Boolean = false, val placeholder: String = "")
+
+val TOOL_CATALOG = listOf(
+	ToolDefinition("tap_element", "Tap a control by accessibility identity", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
+	ToolDefinition("set_text", "Focus, clear, and fill a text field", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("value", "Value", required = true))),
+	ToolDefinition("type_text", "Type into the focused field", listOf(ToolArgument("text", "Text", required = true))),
+	ToolDefinition("swipe_in_direction", "Swipe from the screen center", listOf(ToolArgument("direction", "Direction", required = true, placeholder = "up, down, left, right"), ToolArgument("distance", "Distance", placeholder = "300"))),
+	ToolDefinition("wait_for_element", "Wait until an element appears", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("timeout_ms", "Timeout (ms)", placeholder = "5000"))),
+	ToolDefinition("assert_visible", "Require an element to be visible", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
+	ToolDefinition("assert_not_visible", "Require an element to be absent", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
+	ToolDefinition("assert_text", "Require matching text", listOf(ToolArgument("expected", "Expected text", required = true), ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"))),
+	ToolDefinition("take_screenshot", "Capture a report artifact"),
+	ToolDefinition("press_back", "Navigate back"),
+)
+
+fun ToolOperationDraft.validationError(): String? {
+	val definition = TOOL_CATALOG.firstOrNull { it.name == tool } ?: return "Unsupported tool: $tool"
+	val missing = definition.arguments.filter { it.required && arguments[it.name].isNullOrBlank() }
+	if (missing.isNotEmpty()) return "Required: ${missing.joinToString { it.label }}"
+	if (tool in setOf("tap_element", "wait_for_element", "assert_visible", "assert_not_visible") && listOf("id", "label", "contains_text").none { !arguments[it].isNullOrBlank() }) {
+		return "Provide an accessibility ID, label, or text selector"
+	}
+	return null
+}
 @Serializable enum class TestPlatform(val label: String) { Ios("iOS"), Android("Android") }
 sealed interface TestExecution { data object Idle : TestExecution; data class Running(val message: String) : TestExecution }
 @Serializable data class TestReport(
@@ -151,6 +186,10 @@ sealed interface StudioEvent {
 	data class RemoveTestStep(val id: String) : StudioEvent
 	data class AddTestPlanOperation(val command: String) : StudioEvent
 	data class RemoveTestPlanOperation(val index: Int) : StudioEvent
+	data class ChangeToolOperationType(val tool: String) : StudioEvent
+	data class ChangeToolOperationArgument(val name: String, val value: String) : StudioEvent
+	data object AddToolOperation : StudioEvent
+	data class RemoveToolOperation(val id: String) : StudioEvent
 	data object RunTest : StudioEvent
 	data object CancelTestRun : StudioEvent
 	data class TestRunStarted(val message: String) : StudioEvent
@@ -231,6 +270,19 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 		test = test.copy(compiledPlan = test.compiledPlan?.let { plan -> plan.copy(operations = plan.operations.filterIndexed { index, _ -> index != event.index }) }),
 		isTestDirty = true,
 	)
+	is StudioEvent.ChangeToolOperationType -> copy(operationDraft = ToolOperationDraft(event.tool))
+	is StudioEvent.ChangeToolOperationArgument -> copy(operationDraft = operationDraft.copy(arguments = operationDraft.arguments + (event.name to event.value)))
+	StudioEvent.AddToolOperation -> if (operationDraft.validationError() != null) this else copy(
+		test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio", "1")).let { plan ->
+			plan.copy(toolOperations = plan.toolOperations + ToolOperation("operation-${nextOperationId(plan.toolOperations)}", operationDraft.tool, operationDraft.arguments.filterValues(String::isNotBlank)))
+		}),
+		operationDraft = ToolOperationDraft(operationDraft.tool),
+		isTestDirty = true,
+	)
+	is StudioEvent.RemoveToolOperation -> copy(
+		test = test.copy(compiledPlan = test.compiledPlan?.let { it.copy(toolOperations = it.toolOperations.filterNot { operation -> operation.id == event.id }) }),
+		isTestDirty = true,
+	)
 	StudioEvent.RunTest -> this
 	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
@@ -283,6 +335,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 }
 
 private fun nextStepId(steps: List<TestStep>): Int = (steps.mapNotNull { it.id.removePrefix("step-").toIntOrNull() }.maxOrNull() ?: 0) + 1
+private fun nextOperationId(operations: List<ToolOperation>): Int = (operations.mapNotNull { it.id.removePrefix("operation-").toIntOrNull() }.maxOrNull() ?: 0) + 1
 
 sealed interface ConnectionState {
 	data object Starting : ConnectionState

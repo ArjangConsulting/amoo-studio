@@ -183,6 +183,39 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `typed operations validate required arguments and receive stable ids`() {
+		val state = StudioState()
+			.reduce(StudioEvent.ChangeToolOperationType("set_text"))
+
+		assertEquals("Required: Value", state.operationDraft.validationError())
+
+		val first = state
+			.reduce(StudioEvent.ChangeToolOperationArgument("id", "email"))
+			.reduce(StudioEvent.ChangeToolOperationArgument("value", "person@example.com"))
+			.reduce(StudioEvent.AddToolOperation)
+		val second = first
+			.reduce(StudioEvent.ChangeToolOperationArgument("id", "password"))
+			.reduce(StudioEvent.ChangeToolOperationArgument("value", "secret"))
+			.reduce(StudioEvent.AddToolOperation)
+
+		assertEquals(listOf("operation-1", "operation-2"), second.test.compiledPlan?.toolOperations?.map { it.id })
+		assertEquals(true, second.isTestDirty)
+	}
+
+	@Test
+	fun `typed operations survive amootest serialization`() {
+		val expected = AmooTest(
+			compiledPlan = CompiledToolPlan(
+				compiler = "studio",
+				compilerVersion = "1",
+				toolOperations = listOf(ToolOperation("operation-1", "assert_visible", mapOf("id" to "home"))),
+			),
+		)
+
+		assertEquals(expected, Json.decodeFromString<AmooTest>(Json.encodeToString(expected)))
+	}
+
+	@Test
 	fun `loading reports selects the first result`() {
 		val report = TestReport("report-1", "Sign in", ReportStatus.Passed, "2026-08-20T10:00:00Z")
 

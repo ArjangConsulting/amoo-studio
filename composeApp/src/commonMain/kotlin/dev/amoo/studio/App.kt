@@ -155,7 +155,9 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 }
 
 @Composable private fun TestEditor(state: StudioState, onEvent: (StudioEvent) -> Unit) {
-	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && state.test.compiledPlan?.operations?.isNotEmpty() == true
+	val plan = state.test.compiledPlan
+	val hasExecutablePlan = plan?.toolOperations?.isNotEmpty() == true || plan?.operations?.isNotEmpty() == true
+	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && hasExecutablePlan
 	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 			Button({ onEvent(StudioEvent.NewTest) }) { Text("New") }
@@ -181,9 +183,23 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 			OutlinedButton({ onEvent(StudioEvent.AddTestStep) }) { Text("Add step") }
 			HorizontalDivider()
 			Text("Execution plan", style = MaterialTheme.typography.titleLarge)
-			Text("Build the executable plan from safe commands in Console. Authored steps remain the source of truth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-			val operations = state.test.compiledPlan?.operations.orEmpty()
-			if (operations.isEmpty()) Text("No commands yet. Open Console, choose or type a command, then add it to this test.", color = MaterialTheme.colorScheme.error)
+			Text("Add verified Amoo actions and assertions. Authored steps remain the source of truth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			ToolOperationEditor(state.operationDraft, onEvent)
+			val toolOperations = plan?.toolOperations.orEmpty()
+			if (toolOperations.isEmpty() && plan?.operations.isNullOrEmpty()) Text("Add at least one action or assertion before running this test.", color = MaterialTheme.colorScheme.error)
+			toolOperations.forEachIndexed { index, operation -> key(operation.id) {
+				Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+					Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+						Column(Modifier.weight(1f)) {
+							Text("${index + 1}. ${operation.tool}", fontWeight = FontWeight.SemiBold)
+							if (operation.arguments.isNotEmpty()) Text(operation.arguments.entries.joinToString(" · ") { "${it.key}=${it.value}" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+						}
+						TextButton({ onEvent(StudioEvent.RemoveToolOperation(operation.id)) }) { Text("Remove") }
+					}
+				}
+			} }
+			val operations = plan?.operations.orEmpty()
+			if (operations.isNotEmpty()) Text("Legacy console operations", style = MaterialTheme.typography.titleMedium)
 			operations.forEachIndexed { index, operation -> key("plan-$index-$operation") {
 				Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
 					Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -192,8 +208,43 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 					}
 				}
 			} }
-			OutlinedButton({ onEvent(StudioEvent.SelectSection(StudioSection.Console)) }) { Text("Open Console") }
 			Spacer(Modifier.height(16.dp))
+		}
+	}
+}
+
+@Composable
+private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent) -> Unit) {
+	var expanded by remember { mutableStateOf(false) }
+	val definition = TOOL_CATALOG.first { it.name == draft.tool }
+	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+			Text("Add operation", style = MaterialTheme.typography.titleMedium)
+			Box {
+				OutlinedButton({ expanded = true }) { Text(definition.name) }
+				DropdownMenu(expanded, { expanded = false }) {
+					TOOL_CATALOG.forEach { tool -> DropdownMenuItem(
+						text = { Column { Text(tool.name); Text(tool.description, style = MaterialTheme.typography.bodySmall) } },
+						onClick = { expanded = false; onEvent(StudioEvent.ChangeToolOperationType(tool.name)) },
+					) }
+				}
+			}
+			Text(definition.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+			definition.arguments.forEach { argument ->
+				OutlinedTextField(
+					value = draft.arguments[argument.name].orEmpty(),
+					onValueChange = { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, it)) },
+					label = { Text(argument.label + if (argument.required) " *" else "") },
+					placeholder = argument.placeholder.takeIf(String::isNotBlank)?.let { { Text(it) } },
+					singleLine = true,
+					modifier = Modifier.fillMaxWidth(),
+				)
+			}
+			val validationError = draft.validationError()
+			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+				validationError?.let { Text(it, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+				Button({ onEvent(StudioEvent.AddToolOperation) }, enabled = validationError == null) { Text("Add operation") }
+			}
 		}
 	}
 }

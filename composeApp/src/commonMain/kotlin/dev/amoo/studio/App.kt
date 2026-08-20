@@ -373,8 +373,16 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 			Text("Amoo MCP", style = MaterialTheme.typography.titleLarge)
 			Text("Add Amoo to Claude Desktop, Claude Code, Cursor, or another MCP client. The generated configuration runs `amoo mcp serve` over stdio; Studio never proxies tool traffic.")
-			Button({ onEvent(StudioEvent.CopyMcpConfiguration) }, enabled = state.connection is ConnectionState.Ready) { Text("Copy MCP configuration") }
-			if (state.connection !is ConnectionState.Ready) Text("Connect Amoo before copying its resolved executable configuration.", color = MaterialTheme.colorScheme.error)
+			when (val status = state.mcpStatus) {
+				McpStatus.Unknown -> Text("MCP readiness has not been checked.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+				McpStatus.Checking -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(18.dp)); Text("Checking MCP readiness…") }
+				is McpStatus.Ready -> Text("Ready · ${status.transport} · amoo ${status.arguments.joinToString(" ")}", color = MaterialTheme.colorScheme.primary)
+				is McpStatus.Unavailable -> Text(status.reason, color = MaterialTheme.colorScheme.error)
+			}
+			Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+				Button({ onEvent(StudioEvent.CopyMcpConfiguration) }, enabled = state.mcpStatus is McpStatus.Ready) { Text("Copy MCP configuration") }
+				OutlinedButton({ onEvent(StudioEvent.RefreshMcpStatus) }, enabled = state.connection.supports("mcp.status") && state.mcpStatus !is McpStatus.Checking) { Text("Check again") }
+			}
 		} }
 		Text("AI providers", style = MaterialTheme.typography.titleLarge)
 		state.providers.forEach { profile -> key(profile.id) {

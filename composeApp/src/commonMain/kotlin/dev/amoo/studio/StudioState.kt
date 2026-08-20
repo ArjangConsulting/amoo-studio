@@ -32,7 +32,15 @@ data class StudioState(
 	val lastBuildArtifact: String? = null,
 	val pendingApproval: PendingApproval? = null,
 	val createDevice: CreateDeviceState? = null,
+	val mcpStatus: McpStatus = McpStatus.Unknown,
 )
+
+sealed interface McpStatus {
+	data object Unknown : McpStatus
+	data object Checking : McpStatus
+	data class Ready(val transport: String, val arguments: List<String>) : McpStatus
+	data class Unavailable(val reason: String) : McpStatus
+}
 
 enum class ThemeMode(val label: String) { System("System"), Light("Light"), Dark("Dark") }
 
@@ -171,6 +179,9 @@ sealed interface StudioEvent {
 	data object ClearConsole : StudioEvent
 	data class ShowNotice(val message: String?) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
+	data object RefreshMcpStatus : StudioEvent
+	data class McpStatusLoaded(val transport: String, val arguments: List<String>) : StudioEvent
+	data class McpStatusFailed(val reason: String) : StudioEvent
 	data object RefreshDevices : StudioEvent
 	data class DevicesLoaded(val devices: List<StudioDevice>) : StudioEvent
 	data class SelectDevice(val id: String) : StudioEvent
@@ -247,6 +258,9 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
 	StudioEvent.ClearConsole -> copy(console = ConsoleState())
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
+	StudioEvent.RefreshMcpStatus -> copy(mcpStatus = McpStatus.Checking)
+	is StudioEvent.McpStatusLoaded -> copy(mcpStatus = McpStatus.Ready(event.transport, event.arguments))
+	is StudioEvent.McpStatusFailed -> copy(mcpStatus = McpStatus.Unavailable(event.reason))
 	StudioEvent.RefreshDevices -> copy(deviceOperation = DeviceOperation.Working("Discovering devices…"))
 	is StudioEvent.DevicesLoaded -> copy(devices = event.devices, deviceOperation = DeviceOperation.Idle, selectedDeviceId = selectedDeviceId?.takeIf { id -> event.devices.any { it.id == id } })
 	is StudioEvent.SelectDevice -> copy(selectedDeviceId = event.id)

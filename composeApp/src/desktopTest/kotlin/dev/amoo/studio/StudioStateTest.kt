@@ -191,6 +191,15 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `MCP readiness transitions from checking to ready`() {
+		val checking = StudioState().reduce(StudioEvent.RefreshMcpStatus)
+		assertEquals(McpStatus.Checking, checking.mcpStatus)
+
+		val ready = checking.reduce(StudioEvent.McpStatusLoaded("stdio", listOf("mcp", "serve")))
+		assertEquals(McpStatus.Ready("stdio", listOf("mcp", "serve")), ready.mcpStatus)
+	}
+
+	@Test
 	fun `confirming device creation closes form and starts progress`() {
 		val state = StudioState(createDevice = CreateDeviceState(TestPlatform.Android, "Pixel", "android-36", "pixel_9"))
 

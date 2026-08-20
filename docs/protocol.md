@@ -23,6 +23,7 @@ Current methods:
 | `repl.execute` | Execute a safe structured console command with current Studio context |
 | `tests.run` | Execute an authored test on a selected device and return session/report references |
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
+| `mcp.status` | Report MCP readiness, transport, and launch arguments |
 
 `chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration
 and an environment-variable name, never secret values. Amoo resolves the environment variable and
@@ -45,3 +46,7 @@ waiting for that request; a future additive `tests.cancel` capability may provid
 `reports.list` returns `{ "reports": [...] }`; each report contains its stable ID, test name, status,
 start time, optional duration, device name, summary, and artifact paths. Studio renders these paths but
 does not move or reinterpret backend-owned artifacts.
+
+`mcp.status` returns availability, transport, and arguments for the backend's MCP server. Studio
+still resolves the packaged executable locally when generating client configuration and never proxies
+MCP traffic.

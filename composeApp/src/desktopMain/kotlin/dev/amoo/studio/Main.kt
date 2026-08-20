@@ -57,6 +57,7 @@ private data class Handshake(
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private data class ReportListResult(val reports: List<TestReport>)
+@Serializable private data class McpStatusResult(val available: Boolean, val transport: String, val arguments: List<String>)
 
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -110,11 +111,13 @@ private class StudioController(
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
 			StudioEvent.SaveTestAs -> saveTest(forcePicker = true)
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
+			StudioEvent.RefreshMcpStatus -> refreshMcpStatus()
 			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
 			StudioEvent.RefreshDevices -> refreshDevices()
 			is StudioEvent.SelectSection -> when (event.section) {
 				StudioSection.Devices -> if (state.value.devices.isEmpty()) refreshDevices()
 				StudioSection.Reports -> if (state.value.reports.isEmpty()) refreshReports()
+				StudioSection.Settings -> if (state.value.mcpStatus == McpStatus.Unknown) refreshMcpStatus()
 				else -> Unit
 			}
 			StudioEvent.RefreshReports -> refreshReports()
@@ -248,6 +251,20 @@ private class StudioController(
 		""".trimIndent()
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(configuration), null)
 		state.value = state.value.copy(notice = "MCP configuration copied")
+	}
+
+	private fun refreshMcpStatus() = scope.launch {
+		if (!state.value.connection.supports("mcp.status")) {
+			state.value = state.value.reduce(StudioEvent.McpStatusFailed("The connected Amoo version does not support MCP diagnostics"))
+			return@launch
+		}
+		state.value = state.value.reduce(StudioEvent.RefreshMcpStatus)
+		runCatching { json.decodeFromJsonElement<McpStatusResult>(client.call("mcp.status")) }
+			.onSuccess { result ->
+				state.value = if (result.available) state.value.reduce(StudioEvent.McpStatusLoaded(result.transport, result.arguments))
+				else state.value.reduce(StudioEvent.McpStatusFailed("Amoo MCP is unavailable"))
+			}
+			.onFailure { state.value = state.value.reduce(StudioEvent.McpStatusFailed("MCP readiness check failed: ${it.message}")) }
 	}
 
 	private fun sendChat() {

@@ -17,8 +17,12 @@ dependencyResolutionManagement {
 	}
 }
 
-if (file("../KMPComponents/settings.gradle.kts").isFile) {
-	includeBuild("../KMPComponents")
+if (providers.gradleProperty("useLocalKmpComponents").orNull.toBoolean()) {
+	val localKmpComponents = file("../KMPComponents")
+	require(localKmpComponents.resolve("settings.gradle.kts").isFile) {
+		"useLocalKmpComponents requires KMPComponents to be checked out next to amoo-studio"
+	}
+	includeBuild(localKmpComponents)
 }
 
 include(":composeApp")

@@ -154,7 +154,7 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 }
 
 @Composable private fun TestEditor(state: StudioState, onEvent: (StudioEvent) -> Unit) {
-	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() }
+	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && state.test.compiledPlan?.operations?.isNotEmpty() == true
 	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 			Button({ onEvent(StudioEvent.NewTest) }) { Text("New") }
@@ -178,6 +178,20 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 			Text("Steps", style = MaterialTheme.typography.titleLarge)
 			state.test.steps.forEachIndexed { index, step -> key(step.id) { StepCard(index, step, state.test.steps.size > 1, onEvent) } }
 			OutlinedButton({ onEvent(StudioEvent.AddTestStep) }) { Text("Add step") }
+			HorizontalDivider()
+			Text("Execution plan", style = MaterialTheme.typography.titleLarge)
+			Text("Build the executable plan from safe commands in Console. Authored steps remain the source of truth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			val operations = state.test.compiledPlan?.operations.orEmpty()
+			if (operations.isEmpty()) Text("No commands yet. Open Console, choose or type a command, then add it to this test.", color = MaterialTheme.colorScheme.error)
+			operations.forEachIndexed { index, operation -> key("plan-$index-$operation") {
+				Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+					Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+						Text("${index + 1}. $operation", Modifier.weight(1f))
+						TextButton({ onEvent(StudioEvent.RemoveTestPlanOperation(index)) }) { Text("Remove") }
+					}
+				}
+			} }
+			OutlinedButton({ onEvent(StudioEvent.SelectSection(StudioSection.Console)) }) { Text("Open Console") }
 			Spacer(Modifier.height(16.dp))
 		}
 	}
@@ -288,7 +302,8 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 			}
 		}
 		OutlinedTextField(state.console.input, { onEvent(StudioEvent.ChangeConsoleInput(it)) }, label = { Text("Command") }, placeholder = { Text("devices list") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+			OutlinedButton({ onEvent(StudioEvent.AddTestPlanOperation(state.console.input)) }, enabled = state.console.input.isNotBlank() && state.console.operation == ConsoleOperation.Idle) { Text("Add to test plan") }
 			if (state.console.operation == ConsoleOperation.Running) OutlinedButton({ onEvent(StudioEvent.CancelConsoleCommand) }) { Text("Cancel") }
 			else Button({ onEvent(StudioEvent.ExecuteConsoleCommand) }, enabled = canExecute && state.console.input.isNotBlank()) { Text("Run") }
 		}

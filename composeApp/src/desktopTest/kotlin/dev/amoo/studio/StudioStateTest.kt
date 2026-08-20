@@ -159,6 +159,20 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `console commands can build and edit a compiled test plan`() {
+		val state = StudioState(test = AmooTest(name = "Smoke"))
+		val withPlan = state
+			.reduce(StudioEvent.AddTestPlanOperation("devices list"))
+			.reduce(StudioEvent.AddTestPlanOperation("tests validate"))
+
+		assertEquals(listOf("devices list", "tests validate"), withPlan.test.compiledPlan?.operations)
+		assertEquals(true, withPlan.isTestDirty)
+
+		val removed = withPlan.reduce(StudioEvent.RemoveTestPlanOperation(0))
+		assertEquals(listOf("tests validate"), removed.test.compiledPlan?.operations)
+	}
+
+	@Test
 	fun `loading reports selects the first result`() {
 		val report = TestReport("report-1", "Sign in", ReportStatus.Passed, "2026-08-20T10:00:00Z")
 

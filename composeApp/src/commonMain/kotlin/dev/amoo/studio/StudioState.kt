@@ -141,6 +141,8 @@ sealed interface StudioEvent {
 	data object AddTestStep : StudioEvent
 	data class ChangeTestStep(val id: String, val instruction: String? = null, val expected: String? = null) : StudioEvent
 	data class RemoveTestStep(val id: String) : StudioEvent
+	data class AddTestPlanOperation(val command: String) : StudioEvent
+	data class RemoveTestPlanOperation(val index: Int) : StudioEvent
 	data object RunTest : StudioEvent
 	data object CancelTestRun : StudioEvent
 	data class TestRunStarted(val message: String) : StudioEvent
@@ -206,6 +208,18 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.AddTestStep -> copy(test = test.copy(steps = test.steps + TestStep("step-${nextStepId(test.steps)}")), isTestDirty = true)
 	is StudioEvent.ChangeTestStep -> copy(test = test.copy(steps = test.steps.map { step -> if (step.id == event.id) step.copy(instruction = event.instruction ?: step.instruction, expected = event.expected ?: step.expected) else step }), isTestDirty = true)
 	is StudioEvent.RemoveTestStep -> copy(test = test.copy(steps = test.steps.filterNot { it.id == event.id }), isTestDirty = true)
+	is StudioEvent.AddTestPlanOperation -> {
+		val command = event.command.trim()
+		if (command.isEmpty()) this else copy(
+			test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio-console", "1", emptyList())).let { it.copy(operations = it.operations + command) }),
+			isTestDirty = true,
+			notice = "Added command to ${test.name}",
+		)
+	}
+	is StudioEvent.RemoveTestPlanOperation -> copy(
+		test = test.copy(compiledPlan = test.compiledPlan?.let { plan -> plan.copy(operations = plan.operations.filterIndexed { index, _ -> index != event.index }) }),
+		isTestDirty = true,
+	)
 	StudioEvent.RunTest -> this
 	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)

@@ -34,5 +34,9 @@ Optional `requirements` describe the app, project, or device needed to run the t
 version; authored steps remain the source of truth. `metadata` is a string map for product-neutral
 annotations. All three fields are optional so existing version 1 files remain valid.
 
+Studio's Console can append safe commands to `compiledPlan.operations`; the test editor displays the
+ordered plan and allows individual operations to be removed. Test execution remains disabled until a
+compiled plan exists, preventing authored intent from being reported as if it had run.
+
 Provider profiles are not part of `.amootest` files. Studio stores provider endpoints, model names,
 and API-key environment-variable names in user preferences. API key values are never written by Studio.

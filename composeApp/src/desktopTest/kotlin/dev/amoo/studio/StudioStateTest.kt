@@ -97,4 +97,28 @@ class StudioStateTest {
 		assertEquals(null, test.compiledPlan)
 		assertEquals(emptyMap(), test.metadata)
 	}
+
+	@Test
+	fun `chat request adds user message and clears composer`() {
+		val message = ChatMessage("user-1", ChatRole.User, "Explore this screen")
+		val state = StudioState(chat = ChatState(input = message.content))
+
+		val updated = state.reduce(StudioEvent.ChatRequestStarted(message))
+
+		assertEquals("", updated.chat.input)
+		assertEquals(listOf(message), updated.chat.messages)
+		assertEquals(ChatOperation.Sending, updated.chat.operation)
+	}
+
+	@Test
+	fun `chat response completes request and preserves history`() {
+		val user = ChatMessage("user-1", ChatRole.User, "Explore")
+		val assistant = ChatMessage("assistant-1", ChatRole.Assistant, "I found three controls")
+		val state = StudioState(chat = ChatState(messages = listOf(user), operation = ChatOperation.Sending))
+
+		val updated = state.reduce(StudioEvent.ChatResponseReceived(assistant))
+
+		assertEquals(listOf(user, assistant), updated.chat.messages)
+		assertEquals(ChatOperation.Idle, updated.chat.operation)
+	}
 }

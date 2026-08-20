@@ -18,6 +18,7 @@ import io.github.maniramezan.processrpc.ProcessRpcState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.awt.FileDialog
@@ -48,6 +50,8 @@ private data class Handshake(
 
 @Serializable private data class DeviceListResult(val devices: List<StudioDevice>)
 @Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
+@Serializable private data class ChatRequest(val provider: ProviderProfile, val messages: List<ChatMessage>, val activeTest: AmooTest)
+@Serializable private data class ChatResult(val message: String)
 
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -58,6 +62,7 @@ private class StudioController(
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
+	private var chatJob: Job? = null
 
 	init {
 		client.start()
@@ -86,6 +91,8 @@ private class StudioController(
 		state.value = state.value.reduce(event)
 		when (event) {
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
+			StudioEvent.SendChat -> sendChat()
+			StudioEvent.CancelChat -> { chatJob?.cancel(); chatJob = null }
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -206,6 +213,28 @@ private class StudioController(
 		state.value = state.value.copy(notice = "MCP configuration copied")
 	}
 
+	private fun sendChat() {
+		if (!requireCapability("chat.send")) return
+		val snapshot = state.value
+		val input = snapshot.chat.input.trim()
+		val provider = snapshot.providers.firstOrNull { it.id == snapshot.selectedProviderId } ?: run {
+			state.value = state.value.copy(notice = "Choose an AI provider before sending a message")
+			return
+		}
+		if (input.isEmpty() || chatJob?.isActive == true) return
+		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
+		state.value = state.value.reduce(StudioEvent.ChatRequestStarted(userMessage))
+		val request = ChatRequest(provider, snapshot.chat.messages + userMessage, snapshot.test)
+		chatJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<ChatResult>(client.call("chat.send", json.encodeToJsonElement(request))) }
+				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message))) }
+				.onFailure { error ->
+					if (state.value.chat.operation == ChatOperation.Sending) state.value = state.value.reduce(StudioEvent.ChatRequestFailed("AI request failed: ${error.message}"))
+				}
+			chatJob = null
+		}
+	}
+
 	private fun loadProviders(): List<ProviderProfile> = runCatching {
 		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
 	}.getOrNull() ?: defaultProviders()
@@ -235,7 +264,7 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	override fun close() = client.close()
+	override fun close() { chatJob?.cancel(); client.close() }
 }
 
 private fun detectHostPlatform(): HostPlatform {

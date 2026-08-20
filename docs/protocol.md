@@ -18,6 +18,9 @@ Current methods:
 | `apps.buildInstallRun` | Build, install, and launch an app on the selected target |
 | `apps.reinstallRun` | Reinstall the last build artifact without rebuilding |
 | `apps.resetData` | Erase app data after explicit Studio approval |
+| `chat.send` | Send provider selection, conversation history, and active test context to Amoo |
 
-Chat, session, and report methods will be added to the Swift-owned protocol. Their
-Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.
+`chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration
+and an environment-variable name, never secret values. Amoo resolves the environment variable and
+owns provider networking. Session and report methods will be added to the Swift-owned protocol.
+Their Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.

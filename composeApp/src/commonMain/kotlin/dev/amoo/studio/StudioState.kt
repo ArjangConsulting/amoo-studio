@@ -14,6 +14,7 @@ data class StudioState(
 	val isTestDirty: Boolean = false,
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
+	val chat: ChatState = ChatState(),
 	val notice: String? = null,
 	val devices: List<StudioDevice> = emptyList(),
 	val selectedDeviceId: String? = null,
@@ -64,6 +65,17 @@ data class ProviderProfile(
 
 @Serializable enum class ProviderKind(val label: String) { OpenAI("OpenAI"), Anthropic("Claude / Anthropic"), Ollama("Ollama"), Custom("OpenAI-compatible") }
 
+@Immutable
+data class ChatState(
+	val input: String = "",
+	val messages: List<ChatMessage> = emptyList(),
+	val operation: ChatOperation = ChatOperation.Idle,
+)
+
+@Serializable data class ChatMessage(val id: String, val role: ChatRole, val content: String)
+@Serializable enum class ChatRole { User, Assistant }
+sealed interface ChatOperation { data object Idle : ChatOperation; data object Sending : ChatOperation }
+
 @Serializable
 data class StudioDevice(
 	val id: String,
@@ -100,6 +112,13 @@ sealed interface StudioEvent {
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
+	data class ChangeChatInput(val value: String) : StudioEvent
+	data object SendChat : StudioEvent
+	data class ChatRequestStarted(val message: ChatMessage) : StudioEvent
+	data class ChatResponseReceived(val message: ChatMessage) : StudioEvent
+	data class ChatRequestFailed(val message: String) : StudioEvent
+	data object CancelChat : StudioEvent
+	data object ClearChat : StudioEvent
 	data class ShowNotice(val message: String?) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
 	data object RefreshDevices : StudioEvent
@@ -135,6 +154,13 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SaveProvider -> copy(providers = providers.filterNot { it.id == event.profile.id } + event.profile, selectedProviderId = event.profile.id, notice = "Provider saved")
 	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id })
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)
+	is StudioEvent.ChangeChatInput -> copy(chat = chat.copy(input = event.value))
+	StudioEvent.SendChat -> this
+	is StudioEvent.ChatRequestStarted -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message, operation = ChatOperation.Sending), notice = null)
+	is StudioEvent.ChatResponseReceived -> copy(chat = chat.copy(messages = chat.messages + event.message, operation = ChatOperation.Idle))
+	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = event.message)
+	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
+	StudioEvent.ClearChat -> copy(chat = ChatState())
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
 	StudioEvent.RefreshDevices -> copy(deviceOperation = DeviceOperation.Working("Discovering devices…"))
 	is StudioEvent.DevicesLoaded -> copy(devices = event.devices, deviceOperation = DeviceOperation.Idle, selectedDeviceId = selectedDeviceId?.takeIf { id -> event.devices.any { it.id == id } })

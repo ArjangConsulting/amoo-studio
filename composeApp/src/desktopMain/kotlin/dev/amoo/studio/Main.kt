@@ -88,7 +88,7 @@ private class StudioController(
 	private suspend fun handshake() {
 		try {
 			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
-			state.value = state.value.copy(connection = ConnectionState.Ready(handshake.version, handshake.protocolVersion, handshake.capabilities))
+			state.value = state.value.copy(connection = connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities))
 		} catch (error: Exception) {
 			state.value = state.value.copy(connection = ConnectionState.Unavailable(error.message ?: "Handshake failed"))
 		}

@@ -290,6 +290,17 @@ sealed interface ConnectionState {
 	data class Unavailable(val reason: String) : ConnectionState
 }
 
+const val STUDIO_PROTOCOL_VERSION: Int = 1
+
+fun connectionFromHandshake(version: String, protocolVersion: Int, capabilities: List<String>): ConnectionState =
+	if (protocolVersion == STUDIO_PROTOCOL_VERSION) {
+		ConnectionState.Ready(version, protocolVersion, capabilities)
+	} else {
+		ConnectionState.Unavailable(
+			"Amoo uses Studio protocol $protocolVersion, but this Studio supports protocol $STUDIO_PROTOCOL_VERSION. Update Amoo Studio and Amoo to compatible versions.",
+		)
+	}
+
 val HostPlatform.defaultTestPlatform: TestPlatform
 	get() = if (this == HostPlatform.Linux) TestPlatform.Android else TestPlatform.Ios
 

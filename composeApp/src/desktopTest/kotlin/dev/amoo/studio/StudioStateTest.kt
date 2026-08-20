@@ -3,6 +3,8 @@ package dev.amoo.studio
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class StudioStateTest {
 	@Test
@@ -84,6 +86,14 @@ class StudioStateTest {
 		assertEquals(true, ready.supports("devices.list"))
 		assertEquals(false, ready.supports("apps.resetData"))
 		assertEquals(false, ConnectionState.Starting.supports("devices.list"))
+	}
+
+	@Test
+	fun `incompatible protocol fails with remediation`() {
+		val connection = connectionFromHandshake("2.0.0", STUDIO_PROTOCOL_VERSION + 1, listOf("devices.list"))
+
+		assertIs<ConnectionState.Unavailable>(connection)
+		assertTrue(connection.reason.contains("Update Amoo Studio and Amoo"))
 	}
 
 	@Test

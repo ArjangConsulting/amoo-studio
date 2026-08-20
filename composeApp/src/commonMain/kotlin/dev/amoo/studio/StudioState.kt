@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 @Immutable
 data class StudioState(
 	val hostPlatform: HostPlatform = HostPlatform.MacOS,
+	val themeMode: ThemeMode = ThemeMode.System,
 	val connection: ConnectionState = ConnectionState.Starting,
 	val section: StudioSection = StudioSection.Overview,
 	val test: AmooTest = AmooTest(),
@@ -23,6 +24,8 @@ data class StudioState(
 	val lastBuildArtifact: String? = null,
 	val pendingApproval: PendingApproval? = null,
 )
+
+enum class ThemeMode(val label: String) { System("System"), Light("Light"), Dark("Dark") }
 
 enum class HostPlatform(val label: String) {
 	MacOS("macOS"),
@@ -80,6 +83,7 @@ fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", Provid
 
 sealed interface StudioEvent {
 	data class SelectSection(val section: StudioSection) : StudioEvent
+	data class ChangeThemeMode(val value: ThemeMode) : StudioEvent
 	data object RetryConnection : StudioEvent
 	data object NewTest : StudioEvent
 	data object OpenTest : StudioEvent
@@ -116,6 +120,7 @@ sealed interface StudioEvent {
 
 fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
+	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
 	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
 	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration -> this

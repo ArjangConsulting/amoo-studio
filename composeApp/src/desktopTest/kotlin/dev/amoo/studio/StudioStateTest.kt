@@ -24,6 +24,17 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `changing appearance preserves the rest of studio state`() {
+		val state = StudioState(section = StudioSection.Settings, testPath = "/tmp/login.amootest")
+
+		val updated = state.reduce(StudioEvent.ChangeThemeMode(ThemeMode.Dark))
+
+		assertEquals(ThemeMode.Dark, updated.themeMode)
+		assertEquals(StudioSection.Settings, updated.section)
+		assertEquals("/tmp/login.amootest", updated.testPath)
+	}
+
+	@Test
 	fun `editing a test marks it dirty and preserves connection`() {
 		val connection = ConnectionState.Ready("0.1.0", 1, emptyList())
 		val state = StudioState(connection = connection)

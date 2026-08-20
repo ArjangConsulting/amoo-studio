@@ -54,7 +54,7 @@ private class StudioController(
 ) : AutoCloseable {
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
-	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), providers = loadProviders()))
+	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders()))
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
@@ -85,6 +85,7 @@ private class StudioController(
 		val approvedAction = state.value.pendingApproval?.action
 		state.value = state.value.reduce(event)
 		when (event) {
+			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -208,6 +209,15 @@ private class StudioController(
 	private fun loadProviders(): List<ProviderProfile> = runCatching {
 		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
 	}.getOrNull() ?: defaultProviders()
+
+	private fun loadThemeMode(): ThemeMode = preferences.get("themeMode", null)
+		?.let { stored -> ThemeMode.entries.firstOrNull { it.name == stored } }
+		?: ThemeMode.System
+
+	private fun persistThemeMode(themeMode: ThemeMode) {
+		runCatching { preferences.put("themeMode", themeMode.name) }
+			.onFailure { state.value = state.value.copy(notice = "Could not save appearance: ${it.message}") }
+	}
 
 	private fun persistProviders() {
 		runCatching { preferences.put("providers", json.encodeToString(state.value.providers)) }

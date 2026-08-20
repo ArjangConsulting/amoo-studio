@@ -2,6 +2,7 @@ package dev.amoo.studio
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,7 +16,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
-	MaterialTheme {
+	AmooStudioTheme(state.themeMode) {
 		Surface(Modifier.fillMaxSize()) {
 			Row(Modifier.fillMaxSize()) {
 				NavigationSidebar(state.section, onEvent)
@@ -42,6 +43,17 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 			) }
 		}
 	}
+}
+
+@Composable
+private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Unit) {
+	val useDarkColors = when (themeMode) {
+		ThemeMode.System -> isSystemInDarkTheme()
+		ThemeMode.Light -> false
+		ThemeMode.Dark -> true
+	}
+	val colorScheme = remember(useDarkColors) { if (useDarkColors) darkColorScheme() else lightColorScheme() }
+	MaterialTheme(colorScheme = colorScheme, content = content)
 }
 
 @Composable private fun DevicesContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
@@ -169,6 +181,19 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 
 @Composable private fun SettingsContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+			Text("Appearance", style = MaterialTheme.typography.titleLarge)
+			Text("Choose how Amoo Studio follows your desktop appearance.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			SingleChoiceSegmentedButtonRow {
+				ThemeMode.entries.forEachIndexed { index, mode ->
+					SegmentedButton(
+						selected = state.themeMode == mode,
+						onClick = { onEvent(StudioEvent.ChangeThemeMode(mode)) },
+						shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
+					) { Text(mode.label) }
+				}
+			}
+		} }
 		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 			Text("Amoo MCP", style = MaterialTheme.typography.titleLarge)
 			Text("Add Amoo to Claude Desktop, Claude Code, Cursor, or another MCP client. The generated configuration runs `amoo mcp serve` over stdio; Studio never proxies tool traffic.")

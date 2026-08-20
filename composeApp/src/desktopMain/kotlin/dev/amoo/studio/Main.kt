@@ -54,6 +54,8 @@ private data class Handshake(
 @Serializable private data class ChatResult(val message: String)
 @Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
 @Serializable private data class ReplResult(val output: String)
+@Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
+@Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -66,6 +68,7 @@ private class StudioController(
 	})
 	private var chatJob: Job? = null
 	private var consoleJob: Job? = null
+	private var testRunJob: Job? = null
 
 	init {
 		client.start()
@@ -98,6 +101,8 @@ private class StudioController(
 			StudioEvent.CancelChat -> { chatJob?.cancel(); chatJob = null }
 			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
+			StudioEvent.RunTest -> runTest()
+			StudioEvent.CancelTestRun -> { testRunJob?.cancel(); testRunJob = null }
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -262,6 +267,24 @@ private class StudioController(
 		}
 	}
 
+	private fun runTest() {
+		if (!requireCapability("tests.run")) return
+		val snapshot = state.value
+		val deviceId = snapshot.selectedDeviceId ?: run {
+			state.value = state.value.copy(notice = "Choose a device before running the test")
+			return
+		}
+		if (testRunJob?.isActive == true) return
+		state.value = state.value.reduce(StudioEvent.TestRunStarted("Running ${snapshot.test.name}…"))
+		val request = TestRunRequest(snapshot.test, deviceId, snapshot.selectedProviderId)
+		testRunJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<TestRunResult>(client.call("tests.run", json.encodeToJsonElement(request))) }
+				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.TestRunFinished(result.message, result.sessionId, result.reportId)) }
+				.onFailure { error -> if (state.value.testExecution is TestExecution.Running) state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${error.message}")) }
+			testRunJob = null
+		}
+	}
+
 	private fun loadProviders(): List<ProviderProfile> = runCatching {
 		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
 	}.getOrNull() ?: defaultProviders()
@@ -291,7 +314,7 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); client.close() }
+	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); client.close() }
 }
 
 private fun detectHostPlatform(): HostPlatform {

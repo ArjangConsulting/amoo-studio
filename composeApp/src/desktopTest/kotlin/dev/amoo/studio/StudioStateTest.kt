@@ -145,4 +145,16 @@ class StudioStateTest {
 		assertEquals(listOf(entry), updated.console.entries)
 		assertEquals(ConsoleOperation.Idle, updated.console.operation)
 	}
+
+	@Test
+	fun `completed test run retains session and report references`() {
+		val running = StudioState(testExecution = TestExecution.Running("Running"))
+
+		val updated = running.reduce(StudioEvent.TestRunFinished("Passed", "session-1", "report-1"))
+
+		assertEquals(TestExecution.Idle, updated.testExecution)
+		assertEquals("session-1", updated.lastSessionId)
+		assertEquals("report-1", updated.lastReportId)
+		assertEquals("Passed", updated.notice)
+	}
 }

@@ -134,14 +134,20 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 }
 
 @Composable private fun TestEditor(state: StudioState, onEvent: (StudioEvent) -> Unit) {
+	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() }
 	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 			Button({ onEvent(StudioEvent.NewTest) }) { Text("New") }
 			OutlinedButton({ onEvent(StudioEvent.OpenTest) }) { Text("Open…") }
 			Button({ onEvent(StudioEvent.SaveTest) }) { Text("Save") }
 			OutlinedButton({ onEvent(StudioEvent.SaveTestAs) }) { Text("Save as…") }
+			if (state.testExecution is TestExecution.Running) OutlinedButton({ onEvent(StudioEvent.CancelTestRun) }) { Text("Cancel run") }
+			else Button({ onEvent(StudioEvent.RunTest) }, enabled = canRun) { Text("Run test") }
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
+		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		else if (state.selectedDeviceId == null) Text("Choose a device before running this test.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		if (state.testExecution is TestExecution.Running) LinearProgressIndicator(Modifier.fillMaxWidth())
 		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
 			OutlinedTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = { Text("Test name") }, modifier = Modifier.fillMaxWidth())
 			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth())

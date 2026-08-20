@@ -12,6 +12,9 @@ data class StudioState(
 	val test: AmooTest = AmooTest(),
 	val testPath: String? = null,
 	val isTestDirty: Boolean = false,
+	val testExecution: TestExecution = TestExecution.Idle,
+	val lastSessionId: String? = null,
+	val lastReportId: String? = null,
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
 	val chat: ChatState = ChatState(),
@@ -53,6 +56,7 @@ data class AmooTest(
 @Serializable data class TestRequirements(val appId: String? = null, val projectPath: String? = null, val deviceName: String? = null)
 @Serializable data class CompiledToolPlan(val compiler: String, val compilerVersion: String, val operations: List<String>)
 @Serializable enum class TestPlatform(val label: String) { Ios("iOS"), Android("Android") }
+sealed interface TestExecution { data object Idle : TestExecution; data class Running(val message: String) : TestExecution }
 
 @Serializable
 data class ProviderProfile(
@@ -121,6 +125,11 @@ sealed interface StudioEvent {
 	data object AddTestStep : StudioEvent
 	data class ChangeTestStep(val id: String, val instruction: String? = null, val expected: String? = null) : StudioEvent
 	data class RemoveTestStep(val id: String) : StudioEvent
+	data object RunTest : StudioEvent
+	data object CancelTestRun : StudioEvent
+	data class TestRunStarted(val message: String) : StudioEvent
+	data class TestRunFinished(val message: String, val sessionId: String?, val reportId: String?) : StudioEvent
+	data class TestRunFailed(val message: String) : StudioEvent
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
@@ -170,6 +179,11 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.AddTestStep -> copy(test = test.copy(steps = test.steps + TestStep("step-${nextStepId(test.steps)}")), isTestDirty = true)
 	is StudioEvent.ChangeTestStep -> copy(test = test.copy(steps = test.steps.map { step -> if (step.id == event.id) step.copy(instruction = event.instruction ?: step.instruction, expected = event.expected ?: step.expected) else step }), isTestDirty = true)
 	is StudioEvent.RemoveTestStep -> copy(test = test.copy(steps = test.steps.filterNot { it.id == event.id }), isTestDirty = true)
+	StudioEvent.RunTest -> this
+	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
+	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
+	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = event.message, lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)
+	is StudioEvent.TestRunFailed -> copy(testExecution = TestExecution.Idle, notice = event.message)
 	is StudioEvent.SaveProvider -> copy(providers = providers.filterNot { it.id == event.profile.id } + event.profile, selectedProviderId = event.profile.id, notice = "Provider saved")
 	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id })
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)

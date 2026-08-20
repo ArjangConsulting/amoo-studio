@@ -19,8 +19,14 @@ Current methods:
 | `apps.reinstallRun` | Reinstall the last build artifact without rebuilding |
 | `apps.resetData` | Erase app data after explicit Studio approval |
 | `chat.send` | Send provider selection, conversation history, and active test context to Amoo |
+| `repl.execute` | Execute a safe structured console command with current Studio context |
 
 `chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration
 and an environment-variable name, never secret values. Amoo resolves the environment variable and
 owns provider networking. Session and report methods will be added to the Swift-owned protocol.
 Their Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.
+
+`repl.execute` accepts a command plus the active test, selected device ID, and selected provider ID;
+it returns `{ "output": "..." }`. Output is structured protocol data rendered by the console, never
+captured human CLI output. Destructive commands are rejected at this boundary and must use a Studio
+workflow with an explicit approval event.

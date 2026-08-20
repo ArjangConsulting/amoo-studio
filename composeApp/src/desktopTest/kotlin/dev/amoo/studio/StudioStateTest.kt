@@ -121,4 +121,28 @@ class StudioStateTest {
 		assertEquals(listOf(user, assistant), updated.chat.messages)
 		assertEquals(ChatOperation.Idle, updated.chat.operation)
 	}
+
+	@Test
+	fun `console suggestions include selected runtime context`() {
+		val state = StudioState(
+			console = ConsoleState(input = "pixel"),
+			devices = listOf(StudioDevice("emulator-5554", "Pixel 9", TestPlatform.Android, "16", DeviceStatus.Running)),
+		)
+
+		val suggestions = state.consoleSuggestions()
+
+		assertEquals(listOf("devices inspect emulator-5554"), suggestions.map { it.command })
+	}
+
+	@Test
+	fun `console completion appends result and clears input`() {
+		val entry = ConsoleEntry("command-1", "devices list", "2 devices")
+		val state = StudioState(console = ConsoleState(input = "devices list", operation = ConsoleOperation.Running))
+
+		val updated = state.reduce(StudioEvent.ConsoleCommandFinished(entry))
+
+		assertEquals("", updated.console.input)
+		assertEquals(listOf(entry), updated.console.entries)
+		assertEquals(ConsoleOperation.Idle, updated.console.operation)
+	}
 }

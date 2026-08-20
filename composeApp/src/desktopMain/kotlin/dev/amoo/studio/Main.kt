@@ -52,6 +52,8 @@ private data class Handshake(
 @Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
 @Serializable private data class ChatRequest(val provider: ProviderProfile, val messages: List<ChatMessage>, val activeTest: AmooTest)
 @Serializable private data class ChatResult(val message: String)
+@Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
+@Serializable private data class ReplResult(val output: String)
 
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -63,6 +65,7 @@ private class StudioController(
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
 	private var chatJob: Job? = null
+	private var consoleJob: Job? = null
 
 	init {
 		client.start()
@@ -93,6 +96,8 @@ private class StudioController(
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
 			StudioEvent.SendChat -> sendChat()
 			StudioEvent.CancelChat -> { chatJob?.cancel(); chatJob = null }
+			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
+			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -235,6 +240,28 @@ private class StudioController(
 		}
 	}
 
+	private fun executeConsoleCommand() {
+		if (!requireCapability("repl.execute")) return
+		val snapshot = state.value
+		val command = snapshot.console.input.trim()
+		if (command.isEmpty() || consoleJob?.isActive == true) return
+		if (command.contains(Regex("(^|\\s)(reset|erase|delete|uninstall)(\\s|$)", RegexOption.IGNORE_CASE))) {
+			state.value = state.value.copy(notice = "Destructive commands must use the confirmed workflow in Devices")
+			return
+		}
+		state.value = state.value.reduce(StudioEvent.ConsoleCommandStarted)
+		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId)
+		consoleJob = scope.launch {
+			val entry = runCatching { json.decodeFromJsonElement<ReplResult>(client.call("repl.execute", json.encodeToJsonElement(request))) }
+				.fold(
+					onSuccess = { ConsoleEntry("command-${System.nanoTime()}", command, it.output) },
+					onFailure = { ConsoleEntry("command-${System.nanoTime()}", command, "Command failed: ${it.message}", failed = true) },
+				)
+			if (state.value.console.operation == ConsoleOperation.Running) state.value = state.value.reduce(StudioEvent.ConsoleCommandFinished(entry))
+			consoleJob = null
+		}
+	}
+
 	private fun loadProviders(): List<ProviderProfile> = runCatching {
 		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
 	}.getOrNull() ?: defaultProviders()
@@ -264,7 +291,7 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	override fun close() { chatJob?.cancel(); client.close() }
+	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); client.close() }
 }
 
 private fun detectHostPlatform(): HostPlatform {

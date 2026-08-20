@@ -15,6 +15,7 @@ data class StudioState(
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
 	val chat: ChatState = ChatState(),
+	val console: ConsoleState = ConsoleState(),
 	val notice: String? = null,
 	val devices: List<StudioDevice> = emptyList(),
 	val selectedDeviceId: String? = null,
@@ -34,7 +35,7 @@ enum class HostPlatform(val label: String) {
 	Unsupported("Unsupported host"),
 }
 
-enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Reports("Reports"), Settings("Settings") }
+enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Console("Console"), Reports("Reports"), Settings("Settings") }
 
 @Serializable
 data class AmooTest(
@@ -75,6 +76,17 @@ data class ChatState(
 @Serializable data class ChatMessage(val id: String, val role: ChatRole, val content: String)
 @Serializable enum class ChatRole { User, Assistant }
 sealed interface ChatOperation { data object Idle : ChatOperation; data object Sending : ChatOperation }
+
+@Immutable
+data class ConsoleState(
+	val input: String = "",
+	val entries: List<ConsoleEntry> = emptyList(),
+	val operation: ConsoleOperation = ConsoleOperation.Idle,
+)
+
+@Serializable data class ConsoleEntry(val id: String, val command: String, val output: String, val failed: Boolean = false)
+data class ConsoleSuggestion(val command: String, val description: String)
+sealed interface ConsoleOperation { data object Idle : ConsoleOperation; data object Running : ConsoleOperation }
 
 @Serializable
 data class StudioDevice(
@@ -119,6 +131,13 @@ sealed interface StudioEvent {
 	data class ChatRequestFailed(val message: String) : StudioEvent
 	data object CancelChat : StudioEvent
 	data object ClearChat : StudioEvent
+	data class ChangeConsoleInput(val value: String) : StudioEvent
+	data class ChooseConsoleSuggestion(val command: String) : StudioEvent
+	data object ExecuteConsoleCommand : StudioEvent
+	data object ConsoleCommandStarted : StudioEvent
+	data class ConsoleCommandFinished(val entry: ConsoleEntry) : StudioEvent
+	data object CancelConsoleCommand : StudioEvent
+	data object ClearConsole : StudioEvent
 	data class ShowNotice(val message: String?) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
 	data object RefreshDevices : StudioEvent
@@ -161,6 +180,13 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = event.message)
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())
+	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value))
+	is StudioEvent.ChooseConsoleSuggestion -> copy(console = console.copy(input = event.command))
+	StudioEvent.ExecuteConsoleCommand -> this
+	StudioEvent.ConsoleCommandStarted -> copy(console = console.copy(operation = ConsoleOperation.Running), notice = null)
+	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(input = "", entries = console.entries + event.entry, operation = ConsoleOperation.Idle))
+	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
+	StudioEvent.ClearConsole -> copy(console = ConsoleState())
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
 	StudioEvent.RefreshDevices -> copy(deviceOperation = DeviceOperation.Working("Discovering devices…"))
 	is StudioEvent.DevicesLoaded -> copy(devices = event.devices, deviceOperation = DeviceOperation.Idle, selectedDeviceId = selectedDeviceId?.takeIf { id -> event.devices.any { it.id == id } })
@@ -195,3 +221,19 @@ fun HostPlatform.supports(platform: TestPlatform): Boolean = when (this) {
 
 fun ConnectionState.supports(capability: String): Boolean =
 	this is ConnectionState.Ready && capability in capabilities
+
+fun StudioState.consoleSuggestions(): List<ConsoleSuggestion> {
+	val catalog = buildList {
+		add(ConsoleSuggestion("help", "Show commands supported by the connected Amoo engine"))
+		add(ConsoleSuggestion("devices list", "Discover simulators, emulators, and physical devices"))
+		devices.forEach { device -> add(ConsoleSuggestion("devices inspect ${device.id}", "Inspect ${device.name}")) }
+		selectedDeviceId?.let { id -> add(ConsoleSuggestion("devices inspect $id", "Inspect the selected device")) }
+		add(ConsoleSuggestion("tests validate", "Validate the active test: ${test.name}"))
+		add(ConsoleSuggestion("tests run", "Run the active test on the selected device"))
+		add(ConsoleSuggestion("sessions list", "List recent Amoo sessions"))
+		add(ConsoleSuggestion("reports list", "List available reports"))
+		selectedProviderId?.let { add(ConsoleSuggestion("providers inspect $it", "Inspect the selected AI provider profile")) }
+	}
+	val terms = console.input.trim().lowercase().split(Regex("\\s+")).filter(String::isNotBlank)
+	return catalog.distinctBy { it.command }.filter { suggestion -> terms.all { it in suggestion.command.lowercase() || it in suggestion.description.lowercase() } }.take(8)
+}

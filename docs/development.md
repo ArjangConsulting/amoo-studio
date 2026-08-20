@@ -27,3 +27,18 @@ operations on either host.
 ./gradlew :composeApp:desktopTest
 ./gradlew :composeApp:compileKotlinDesktop
 ```
+
+CI intentionally does not require a simulator or emulator. Before a release, exercise the real local
+Amoo process boundary and device discovery instead:
+
+```bash
+cd ../mobile-testing
+swift build --product amoo
+cd ../amoo-studio
+./scripts/studio-protocol-smoke.py --require-device
+AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
+```
+
+The smoke command verifies the handshake, health, device discovery, and MCP readiness against the
+real backend. Continue the interactive E2E pass in Studio by selecting the discovered device,
+building/installing the sample app, saving and reopening an `.amootest`, and running its plan.

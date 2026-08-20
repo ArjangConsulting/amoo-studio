@@ -3,5 +3,6 @@
 **/build/
 .idea/
 *.iml
+__pycache__/
 local.properties
 .DS_Store

@@ -51,7 +51,7 @@ private data class Handshake(
 @Serializable private data class DeviceListResult(val devices: List<StudioDevice>)
 @Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
 @Serializable private data class ChatRequest(val provider: ProviderProfile, val messages: List<ChatMessage>, val activeTest: AmooTest)
-@Serializable private data class ChatResult(val message: String)
+@Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
 @Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
 @Serializable private data class ReplResult(val output: String)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
@@ -278,7 +278,7 @@ private class StudioController(
 		val request = ChatRequest(provider, snapshot.chat.messages + userMessage, snapshot.test)
 		chatJob = scope.launch {
 			runCatching { json.decodeFromJsonElement<ChatResult>(client.call("chat.send", json.encodeToJsonElement(request))) }
-				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message))) }
+				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message), result.proposedPlan)) }
 				.onFailure { error ->
 					if (state.value.chat.operation == ChatOperation.Sending) state.value = state.value.reduce(StudioEvent.ChatRequestFailed("AI request failed: ${error.message}"))
 				}

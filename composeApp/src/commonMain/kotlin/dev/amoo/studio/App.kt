@@ -289,6 +289,7 @@ private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent
 			if (state.chat.operation == ChatOperation.Sending) item { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(18.dp)); Text("Amoo is thinking…") } }
 		}
 		FeatureCard("Active test: ${state.test.name}", "${state.test.platform.label} · ${state.test.steps.size} steps${if (state.isTestDirty) " · unsaved changes" else ""}", Modifier.fillMaxWidth()) { onEvent(StudioEvent.SelectSection(StudioSection.Tests)) }
+		state.chat.proposedPlan?.let { plan -> ProposedPlanCard(plan, onEvent) }
 		OutlinedTextField(
 			value = state.chat.input,
 			onValueChange = { onEvent(StudioEvent.ChangeChatInput(it)) },
@@ -300,6 +301,23 @@ private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent
 		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
 			if (state.chat.operation == ChatOperation.Sending) OutlinedButton({ onEvent(StudioEvent.CancelChat) }) { Text("Cancel") }
 			else Button({ onEvent(StudioEvent.SendChat) }, enabled = canChat && provider != null && state.chat.input.isNotBlank()) { Text("Send") }
+		}
+	}
+}
+
+@Composable
+private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> Unit) {
+	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text("Review AI-proposed plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+			Text("Nothing changes until you apply this plan.", color = MaterialTheme.colorScheme.onTertiaryContainer)
+			plan.toolOperations.forEachIndexed { index, operation ->
+				Text("${index + 1}. ${operation.tool}${if (operation.arguments.isEmpty()) "" else " · " + operation.arguments.entries.joinToString { "${it.key}=${it.value}" }}")
+			}
+			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+				TextButton({ onEvent(StudioEvent.RejectProposedPlan) }) { Text("Discard") }
+				Button({ onEvent(StudioEvent.ApplyProposedPlan) }, enabled = plan.toolOperations.isNotEmpty()) { Text("Apply to test") }
+			}
 		}
 	}
 }

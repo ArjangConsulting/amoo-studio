@@ -133,6 +133,26 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `AI plan requires explicit apply before changing the test`() {
+		val proposal = CompiledToolPlan(
+			"ai",
+			"1",
+			toolOperations = listOf(ToolOperation("operation-1", "assert_visible", mapOf("id" to "home"))),
+		)
+		val response = StudioState().reduce(
+			StudioEvent.ChatResponseReceived(ChatMessage("assistant-1", ChatRole.Assistant, "Review this plan"), proposal),
+		)
+
+		assertEquals(null, response.test.compiledPlan)
+		assertEquals(proposal, response.chat.proposedPlan)
+
+		val applied = response.reduce(StudioEvent.ApplyProposedPlan)
+		assertEquals(proposal, applied.test.compiledPlan)
+		assertEquals(null, applied.chat.proposedPlan)
+		assertEquals(true, applied.isTestDirty)
+	}
+
+	@Test
 	fun `console suggestions include selected runtime context`() {
 		val state = StudioState(
 			console = ConsoleState(input = "pixel"),

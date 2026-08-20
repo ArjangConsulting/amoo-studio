@@ -133,6 +133,7 @@ data class ChatState(
 	val input: String = "",
 	val messages: List<ChatMessage> = emptyList(),
 	val operation: ChatOperation = ChatOperation.Idle,
+	val proposedPlan: CompiledToolPlan? = null,
 )
 
 @Serializable data class ChatMessage(val id: String, val role: ChatRole, val content: String)
@@ -207,7 +208,9 @@ sealed interface StudioEvent {
 	data class ChangeChatInput(val value: String) : StudioEvent
 	data object SendChat : StudioEvent
 	data class ChatRequestStarted(val message: ChatMessage) : StudioEvent
-	data class ChatResponseReceived(val message: ChatMessage) : StudioEvent
+	data class ChatResponseReceived(val message: ChatMessage, val proposedPlan: CompiledToolPlan? = null) : StudioEvent
+	data object ApplyProposedPlan : StudioEvent
+	data object RejectProposedPlan : StudioEvent
 	data class ChatRequestFailed(val message: String) : StudioEvent
 	data object CancelChat : StudioEvent
 	data object ClearChat : StudioEvent
@@ -306,7 +309,9 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChangeChatInput -> copy(chat = chat.copy(input = event.value))
 	StudioEvent.SendChat -> this
 	is StudioEvent.ChatRequestStarted -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message, operation = ChatOperation.Sending), notice = null)
-	is StudioEvent.ChatResponseReceived -> copy(chat = chat.copy(messages = chat.messages + event.message, operation = ChatOperation.Idle))
+	is StudioEvent.ChatResponseReceived -> copy(chat = chat.copy(messages = chat.messages + event.message, operation = ChatOperation.Idle, proposedPlan = event.proposedPlan))
+	StudioEvent.ApplyProposedPlan -> chat.proposedPlan?.let { proposal -> copy(test = test.copy(compiledPlan = proposal), isTestDirty = true, chat = chat.copy(proposedPlan = null), notice = "Applied AI plan to ${test.name}") } ?: this
+	StudioEvent.RejectProposedPlan -> copy(chat = chat.copy(proposedPlan = null), notice = "AI plan discarded")
 	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = event.message)
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())

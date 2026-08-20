@@ -2,7 +2,6 @@ package dev.amoo.studio
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,10 +14,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.maniramezan.kmpcomponents.KmpTheme
+import io.github.maniramezan.kmpcomponents.ThemeMode as KmpThemeMode
 
 @Composable
 fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
-	AmooStudioTheme(state.themeMode) {
+	KmpTheme(state.themeMode.toKmpThemeMode()) {
 		Surface(Modifier.fillMaxSize()) {
 			Row(Modifier.fillMaxSize()) {
 				NavigationSidebar(state.section, onEvent)
@@ -49,15 +50,10 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	}
 }
 
-@Composable
-private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Unit) {
-	val useDarkColors = when (themeMode) {
-		ThemeMode.System -> isSystemInDarkTheme()
-		ThemeMode.Light -> false
-		ThemeMode.Dark -> true
-	}
-	val colorScheme = remember(useDarkColors) { if (useDarkColors) darkColorScheme() else lightColorScheme() }
-	MaterialTheme(colorScheme = colorScheme, content = content)
+private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
+	ThemeMode.System -> KmpThemeMode.SYSTEM
+	ThemeMode.Light -> KmpThemeMode.LIGHT
+	ThemeMode.Dark -> KmpThemeMode.DARK
 }
 
 @Composable private fun DevicesContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {

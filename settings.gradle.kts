@@ -17,4 +17,8 @@ dependencyResolutionManagement {
 	}
 }
 
+if (file("../KMPComponents/settings.gradle.kts").isFile) {
+	includeBuild("../KMPComponents")
+}
+
 include(":composeApp")

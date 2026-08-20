@@ -64,6 +64,7 @@ private class StudioController(
 ) : AutoCloseable {
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+	private val testFileStore = AmooTestFileStore(json)
 	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders()))
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
@@ -206,11 +207,7 @@ private class StudioController(
 
 	private fun openTest() {
 		val file = chooseFile(FileDialog.LOAD, "Open Amoo test", "*.amootest") ?: return
-		runCatching {
-			json.decodeFromString<AmooTest>(file.readText()).also {
-				require(it.formatVersion == 1) { "Unsupported .amootest format version ${it.formatVersion}" }
-			}
-		}
+		runCatching { testFileStore.load(file) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.TestLoaded(it, file.absolutePath)) }
 			.onFailure { state.value = state.value.copy(notice = "Could not open test: ${it.message}") }
 	}
@@ -220,7 +217,7 @@ private class StudioController(
 		var file = if (forcePicker) chooseFile(FileDialog.SAVE, "Save Amoo test", "${safeFileName(state.value.test.name)}.amootest") else existing
 		if (file == null) return
 		if (file.extension.lowercase() != "amootest") file = File(file.parentFile, "${file.name}.amootest")
-		runCatching { file.writeText(json.encodeToString(state.value.test)) }
+		runCatching { testFileStore.save(state.value.test, file) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.TestSaved(file.absolutePath)) }
 			.onFailure { state.value = state.value.copy(notice = "Could not save test: ${it.message}") }
 	}

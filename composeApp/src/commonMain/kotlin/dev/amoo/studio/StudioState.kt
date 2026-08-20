@@ -15,6 +15,9 @@ data class StudioState(
 	val testExecution: TestExecution = TestExecution.Idle,
 	val lastSessionId: String? = null,
 	val lastReportId: String? = null,
+	val reports: List<TestReport> = emptyList(),
+	val selectedReportId: String? = null,
+	val reportsLoading: Boolean = false,
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
 	val chat: ChatState = ChatState(),
@@ -57,6 +60,17 @@ data class AmooTest(
 @Serializable data class CompiledToolPlan(val compiler: String, val compilerVersion: String, val operations: List<String>)
 @Serializable enum class TestPlatform(val label: String) { Ios("iOS"), Android("Android") }
 sealed interface TestExecution { data object Idle : TestExecution; data class Running(val message: String) : TestExecution }
+@Serializable data class TestReport(
+	val id: String,
+	val testName: String,
+	val status: ReportStatus,
+	val startedAt: String,
+	val durationMillis: Long? = null,
+	val deviceName: String = "",
+	val summary: String = "",
+	val artifacts: List<String> = emptyList(),
+)
+@Serializable enum class ReportStatus { Passed, Failed, Cancelled, Running }
 
 @Serializable
 data class ProviderProfile(
@@ -130,6 +144,10 @@ sealed interface StudioEvent {
 	data class TestRunStarted(val message: String) : StudioEvent
 	data class TestRunFinished(val message: String, val sessionId: String?, val reportId: String?) : StudioEvent
 	data class TestRunFailed(val message: String) : StudioEvent
+	data object RefreshReports : StudioEvent
+	data class ReportsLoaded(val reports: List<TestReport>) : StudioEvent
+	data class ReportsFailed(val message: String) : StudioEvent
+	data class SelectReport(val id: String) : StudioEvent
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
@@ -184,6 +202,10 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
 	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = event.message, lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)
 	is StudioEvent.TestRunFailed -> copy(testExecution = TestExecution.Idle, notice = event.message)
+	StudioEvent.RefreshReports -> copy(reportsLoading = true, notice = null)
+	is StudioEvent.ReportsLoaded -> copy(reports = event.reports, reportsLoading = false, selectedReportId = selectedReportId?.takeIf { id -> event.reports.any { it.id == id } } ?: event.reports.firstOrNull()?.id)
+	is StudioEvent.ReportsFailed -> copy(reportsLoading = false, notice = event.message)
+	is StudioEvent.SelectReport -> copy(selectedReportId = event.id)
 	is StudioEvent.SaveProvider -> copy(providers = providers.filterNot { it.id == event.profile.id } + event.profile, selectedProviderId = event.profile.id, notice = "Provider saved")
 	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id })
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)

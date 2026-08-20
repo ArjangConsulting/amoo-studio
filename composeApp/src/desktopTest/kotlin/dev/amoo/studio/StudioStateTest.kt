@@ -157,4 +157,15 @@ class StudioStateTest {
 		assertEquals("report-1", updated.lastReportId)
 		assertEquals("Passed", updated.notice)
 	}
+
+	@Test
+	fun `loading reports selects the first result`() {
+		val report = TestReport("report-1", "Sign in", ReportStatus.Passed, "2026-08-20T10:00:00Z")
+
+		val updated = StudioState(reportsLoading = true).reduce(StudioEvent.ReportsLoaded(listOf(report)))
+
+		assertEquals(listOf(report), updated.reports)
+		assertEquals("report-1", updated.selectedReportId)
+		assertEquals(false, updated.reportsLoading)
+	}
 }

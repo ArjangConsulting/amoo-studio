@@ -56,6 +56,7 @@ private data class Handshake(
 @Serializable private data class ReplResult(val output: String)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
+@Serializable private data class ReportListResult(val reports: List<TestReport>)
 
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -110,7 +111,12 @@ private class StudioController(
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
 			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
 			StudioEvent.RefreshDevices -> refreshDevices()
-			is StudioEvent.SelectSection -> if (event.section == StudioSection.Devices && state.value.devices.isEmpty()) refreshDevices()
+			is StudioEvent.SelectSection -> when (event.section) {
+				StudioSection.Devices -> if (state.value.devices.isEmpty()) refreshDevices()
+				StudioSection.Reports -> if (state.value.reports.isEmpty()) refreshReports()
+				else -> Unit
+			}
+			StudioEvent.RefreshReports -> refreshReports()
 			is StudioEvent.StartDevice -> runDeviceOperation("Starting device…", "devices.start", buildJsonObject { put("id", event.id) }, refreshAfter = true)
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
 			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
@@ -125,6 +131,16 @@ private class StudioController(
 		runCatching { json.decodeFromJsonElement<DeviceListResult>(client.call("devices.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.DevicesLoaded(it.devices)) }
 			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Device discovery failed: ${it.message}") }
+	}
+
+	private fun refreshReports() = scope.launch {
+		if (!state.value.connection.supports("reports.list")) {
+			state.value = state.value.reduce(StudioEvent.ReportsFailed("The connected Amoo version does not support reports.list"))
+			return@launch
+		}
+		runCatching { json.decodeFromJsonElement<ReportListResult>(client.call("reports.list")) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.ReportsLoaded(it.reports)) }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ReportsFailed("Report loading failed: ${it.message}")) }
 	}
 
 	private fun chooseProjectPath() {

@@ -21,6 +21,7 @@ Current methods:
 | `chat.send` | Send provider selection, conversation history, and active test context to Amoo |
 | `repl.execute` | Execute a safe structured console command with current Studio context |
 | `tests.run` | Execute an authored test on a selected device and return session/report references |
+| `reports.list` | List report summaries and artifact paths owned by Amoo |
 
 `chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration
 and an environment-variable name, never secret values. Amoo resolves the environment variable and
@@ -35,3 +36,7 @@ workflow with an explicit approval event.
 `tests.run` accepts the complete authored test, selected device ID, and optional provider profile ID.
 It returns a user-facing summary plus optional `sessionId` and `reportId`. Cancelling in Studio stops
 waiting for that request; a future additive `tests.cancel` capability may provide backend cancellation.
+
+`reports.list` returns `{ "reports": [...] }`; each report contains its stable ID, test name, status,
+start time, optional duration, device name, summary, and artifact paths. Studio renders these paths but
+does not move or reinterpret backend-owned artifacts.

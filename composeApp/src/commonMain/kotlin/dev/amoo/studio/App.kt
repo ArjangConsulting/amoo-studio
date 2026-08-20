@@ -33,8 +33,8 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 						StudioSection.Devices -> DevicesContent(state, onEvent)
 						StudioSection.Chat -> AiTestingContent(state, onEvent)
 						StudioSection.Console -> ConsoleContent(state, onEvent)
+						StudioSection.Reports -> ReportsContent(state, onEvent)
 						StudioSection.Settings -> SettingsContent(state, onEvent)
-						else -> ComingSoonContent(state.section)
 					}
 				}
 			}
@@ -275,6 +275,51 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 	}
 }
 
+@Composable private fun ReportsContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
+	val canList = state.connection.supports("reports.list")
+	val selected = state.reports.firstOrNull { it.id == state.selectedReportId }
+	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+			Text("Test reports", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+			Button({ onEvent(StudioEvent.RefreshReports) }, enabled = canList && !state.reportsLoading) { Text("Refresh") }
+		}
+		if (!canList) Text("The connected Amoo version does not advertise reports.list.", color = MaterialTheme.colorScheme.error)
+		if (state.reportsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+		Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+			LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				if (!state.reportsLoading && state.reports.isEmpty()) item { Text("No reports yet. Run a test to create one.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+				items(state.reports, key = { it.id }) { report ->
+					Card(Modifier.fillMaxWidth().clickable { onEvent(StudioEvent.SelectReport(report.id)) }, colors = CardDefaults.cardColors(containerColor = if (report.id == state.selectedReportId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow)) {
+						Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+							Row(Modifier.fillMaxWidth()) { Text(report.testName, Modifier.weight(1f), fontWeight = FontWeight.Bold); ReportStatusLabel(report.status) }
+							Text("${report.startedAt}${report.deviceName.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+						}
+					}
+				}
+			}
+			Card(Modifier.weight(0.58f).fillMaxHeight()) {
+				if (selected == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Choose a report") }
+				else Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+					Row(Modifier.fillMaxWidth()) { Text(selected.testName, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); ReportStatusLabel(selected.status) }
+					Text(selected.summary.ifBlank { "No summary was provided." })
+					selected.durationMillis?.let { Text("Duration: ${it} ms") }
+					Text("Session report ID: ${selected.id}", style = MaterialTheme.typography.bodySmall)
+					if (selected.artifacts.isNotEmpty()) { HorizontalDivider(); Text("Artifacts", style = MaterialTheme.typography.titleMedium); selected.artifacts.forEach { Text(it, style = MaterialTheme.typography.bodySmall) } }
+				}
+			}
+		}
+	}
+}
+
+@Composable private fun ReportStatusLabel(status: ReportStatus) {
+	val color = when (status) {
+		ReportStatus.Passed -> MaterialTheme.colorScheme.primary
+		ReportStatus.Failed -> MaterialTheme.colorScheme.error
+		ReportStatus.Cancelled, ReportStatus.Running -> MaterialTheme.colorScheme.tertiary
+	}
+	Text(status.name, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+}
+
 @Composable private fun SettingsContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
 		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -334,4 +379,3 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 }
 
 @Composable private fun FeatureCard(title: String, description: String, modifier: Modifier = Modifier, onClick: () -> Unit) { Card(modifier.clickable(onClick = onClick)) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, style = MaterialTheme.typography.titleMedium); Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
-@Composable private fun ComingSoonContent(section: StudioSection) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("${section.title} will be enabled by the corresponding Amoo Studio protocol capability.") } }

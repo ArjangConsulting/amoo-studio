@@ -22,6 +22,9 @@ Current methods:
 | `chat.send` | Send provider selection, conversation history, and active test context to Amoo |
 | `repl.execute` | Execute a safe structured console command with current Studio context |
 | `tests.run` | Execute an authored test on a selected device and return session/report references |
+| `tests.start` | Start a cancellable test run and return its run ID immediately |
+| `tests.status` | Poll per-operation progress and terminal session/report references |
+| `tests.cancel` | Cancel a running backend task by run ID |
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
 | `mcp.status` | Report MCP readiness, transport, and launch arguments |
 
@@ -41,7 +44,8 @@ workflow with an explicit approval event.
 
 `tests.run` accepts the complete authored test, selected device ID, and optional provider profile ID.
 It returns a user-facing summary plus optional `sessionId` and `reportId`. Cancelling in Studio stops
-waiting for that request; a future additive `tests.cancel` capability may provide backend cancellation.
+waiting for legacy backends. When `tests.start`, `tests.status`, and `tests.cancel` are advertised,
+Studio uses the asynchronous workflow, renders per-operation progress, and cancels the backend task.
 
 `reports.list` returns `{ "reports": [...] }`; each report contains its stable ID, test name, status,
 start time, optional duration, device name, summary, and artifact paths. Studio renders these paths but

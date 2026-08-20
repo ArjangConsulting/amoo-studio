@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -30,6 +31,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.awt.FileDialog
+import java.awt.Desktop
 import java.awt.Frame
 import java.awt.Image
 import java.awt.Taskbar
@@ -56,6 +58,9 @@ private data class Handshake(
 @Serializable private data class ReplResult(val output: String)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
+@Serializable private data class TestStartResult(val runId: String)
+@Serializable private data class TestRunStatus(val runId: String, val state: TestRunState, val currentOperation: Int, val totalOperations: Int, val message: String, val sessionId: String? = null, val reportId: String? = null)
+@Serializable private enum class TestRunState { Running, Passed, Failed, Cancelled }
 @Serializable private data class ReportListResult(val reports: List<TestReport>)
 @Serializable private data class McpStatusResult(val available: Boolean, val transport: String, val arguments: List<String>)
 
@@ -98,6 +103,7 @@ private class StudioController(
 	fun onEvent(event: StudioEvent) {
 		val approvedAction = state.value.pendingApproval?.action
 		val createDeviceRequest = state.value.createDevice
+		val activeRunId = (state.value.testExecution as? TestExecution.Running)?.runId
 		state.value = state.value.reduce(event)
 		when (event) {
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
@@ -106,7 +112,7 @@ private class StudioController(
 			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
 			StudioEvent.RunTest -> runTest()
-			StudioEvent.CancelTestRun -> { testRunJob?.cancel(); testRunJob = null }
+			StudioEvent.CancelTestRun -> cancelTestRun(activeRunId)
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -122,6 +128,7 @@ private class StudioController(
 				else -> Unit
 			}
 			StudioEvent.RefreshReports -> refreshReports()
+			is StudioEvent.OpenReportArtifact -> openArtifact(event.path)
 			is StudioEvent.StartDevice -> runDeviceOperation("Starting device…", "devices.start", buildJsonObject { put("id", event.id) }, refreshAfter = true)
 			StudioEvent.ConfirmCreateDevice -> createDeviceRequest?.let(::createDevice)
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
@@ -147,6 +154,15 @@ private class StudioController(
 		runCatching { json.decodeFromJsonElement<ReportListResult>(client.call("reports.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.ReportsLoaded(it.reports)) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.ReportsFailed("Report loading failed: ${it.message}")) }
+	}
+
+	private fun openArtifact(path: String) {
+		runCatching {
+			val file = File(path)
+			require(file.isFile) { "Artifact no longer exists: $path" }
+			require(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) { "Opening files is unsupported on this desktop" }
+			Desktop.getDesktop().open(file)
+		}.onFailure { state.value = state.value.copy(notice = it.message ?: "Could not open artifact") }
 	}
 
 	private fun chooseProjectPath() {
@@ -319,11 +335,46 @@ private class StudioController(
 		state.value = state.value.reduce(StudioEvent.TestRunStarted("Running ${snapshot.test.name}…"))
 		val request = TestRunRequest(snapshot.test, deviceId, snapshot.selectedProviderId)
 		testRunJob = scope.launch {
+			if (snapshot.connection.supports("tests.start")) {
+				runAsyncTest(request)
+				return@launch
+			}
 			runCatching { json.decodeFromJsonElement<TestRunResult>(client.call("tests.run", json.encodeToJsonElement(request))) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.TestRunFinished(result.message, result.sessionId, result.reportId)) }
 				.onFailure { error -> if (state.value.testExecution is TestExecution.Running) state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${error.message}")) }
 			testRunJob = null
 		}
+	}
+
+	private suspend fun runAsyncTest(request: TestRunRequest) {
+		runCatching { json.decodeFromJsonElement<TestStartResult>(client.call("tests.start", json.encodeToJsonElement(request))) }
+			.onFailure { state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${it.message}")); testRunJob = null }
+			.onSuccess { started ->
+				while (testRunJob?.isActive == true) {
+					val status = runCatching {
+						json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", started.runId) }))
+					}.getOrElse {
+						state.value = state.value.reduce(StudioEvent.TestRunFailed("Test progress failed: ${it.message}"))
+						break
+					}
+					state.value = state.value.reduce(StudioEvent.TestRunProgress(status.runId, status.message, status.currentOperation, status.totalOperations))
+					when (status.state) {
+						TestRunState.Running -> delay(250)
+						TestRunState.Passed -> { state.value = state.value.reduce(StudioEvent.TestRunFinished(status.message, status.sessionId, status.reportId)); break }
+						TestRunState.Failed -> { state.value = state.value.reduce(StudioEvent.TestRunFailed(status.message)); break }
+						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = status.message); break }
+					}
+				}
+				testRunJob = null
+			}
+	}
+
+	private fun cancelTestRun(runId: String?) {
+		if (runId != null && state.value.connection.supports("tests.cancel")) {
+			scope.launch { runCatching { client.call("tests.cancel", buildJsonObject { put("runId", runId) }) } }
+		}
+		testRunJob?.cancel()
+		testRunJob = null
 	}
 
 	private fun loadProviders(): List<ProviderProfile> = runCatching {

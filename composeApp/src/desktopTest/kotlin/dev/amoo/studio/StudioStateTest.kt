@@ -221,6 +221,14 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `test progress retains backend run identity and operation count`() {
+		val updated = StudioState(testExecution = TestExecution.Running("Preparing"))
+			.reduce(StudioEvent.TestRunProgress("run-1", "Running assert_visible…", 2, 3))
+
+		assertEquals(TestExecution.Running("Running assert_visible…", "run-1", 2, 3), updated.testExecution)
+	}
+
+	@Test
 	fun `console commands can build and edit a compiled test plan`() {
 		val state = StudioState(test = AmooTest(name = "Smoke"))
 		val withPlan = state

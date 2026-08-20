@@ -170,7 +170,12 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 		}
 		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		else if (state.selectedDeviceId == null) Text("Choose a device before running this test.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-		if (state.testExecution is TestExecution.Running) LinearProgressIndicator(Modifier.fillMaxWidth())
+		if (state.testExecution is TestExecution.Running) {
+			val execution = state.testExecution
+			if (execution.totalOperations > 0) LinearProgressIndicator({ execution.currentOperation.toFloat() / execution.totalOperations }, Modifier.fillMaxWidth())
+			else LinearProgressIndicator(Modifier.fillMaxWidth())
+			Text(execution.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+		}
 		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
 			OutlinedTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = { Text("Test name") }, modifier = Modifier.fillMaxWidth())
 			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth())
@@ -445,7 +450,10 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 					Text(selected.summary.ifBlank { "No summary was provided." })
 					selected.durationMillis?.let { Text("Duration: ${it} ms") }
 					Text("Session report ID: ${selected.id}", style = MaterialTheme.typography.bodySmall)
-					if (selected.artifacts.isNotEmpty()) { HorizontalDivider(); Text("Artifacts", style = MaterialTheme.typography.titleMedium); selected.artifacts.forEach { Text(it, style = MaterialTheme.typography.bodySmall) } }
+					if (selected.artifacts.isNotEmpty()) { HorizontalDivider(); Text("Artifacts", style = MaterialTheme.typography.titleMedium); selected.artifacts.forEach { path ->
+						OutlinedButton({ onEvent(StudioEvent.OpenReportArtifact(path)) }) { Text("Open ${path.substringAfterLast('/')}") }
+						Text(path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					} }
 				}
 			}
 		}

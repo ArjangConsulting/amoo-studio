@@ -103,7 +103,7 @@ fun ToolOperationDraft.validationError(): String? {
 	return null
 }
 @Serializable enum class TestPlatform(val label: String) { Ios("iOS"), Android("Android") }
-sealed interface TestExecution { data object Idle : TestExecution; data class Running(val message: String) : TestExecution }
+sealed interface TestExecution { data object Idle : TestExecution; data class Running(val message: String, val runId: String? = null, val currentOperation: Int = 0, val totalOperations: Int = 0) : TestExecution }
 @Serializable data class TestReport(
 	val id: String,
 	val testName: String,
@@ -196,12 +196,14 @@ sealed interface StudioEvent {
 	data object RunTest : StudioEvent
 	data object CancelTestRun : StudioEvent
 	data class TestRunStarted(val message: String) : StudioEvent
+	data class TestRunProgress(val runId: String, val message: String, val currentOperation: Int, val totalOperations: Int) : StudioEvent
 	data class TestRunFinished(val message: String, val sessionId: String?, val reportId: String?) : StudioEvent
 	data class TestRunFailed(val message: String) : StudioEvent
 	data object RefreshReports : StudioEvent
 	data class ReportsLoaded(val reports: List<TestReport>) : StudioEvent
 	data class ReportsFailed(val message: String) : StudioEvent
 	data class SelectReport(val id: String) : StudioEvent
+	data class OpenReportArtifact(val path: String) : StudioEvent
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
@@ -256,7 +258,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
 	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
-	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration -> this
+	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
 	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = "Opened ${event.path}")
 	is StudioEvent.TestSaved -> copy(testPath = event.path, isTestDirty = false, notice = "Saved ${event.path}")
 	is StudioEvent.ChangeTestName -> copy(test = test.copy(name = event.value), isTestDirty = true)
@@ -297,6 +299,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.RunTest -> this
 	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
+	is StudioEvent.TestRunProgress -> copy(testExecution = TestExecution.Running(event.message, event.runId, event.currentOperation, event.totalOperations))
 	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = event.message, lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)
 	is StudioEvent.TestRunFailed -> copy(testExecution = TestExecution.Idle, notice = event.message)
 	StudioEvent.RefreshReports -> copy(reportsLoading = true, notice = null)

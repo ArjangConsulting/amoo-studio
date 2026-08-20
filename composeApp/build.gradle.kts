@@ -15,6 +15,7 @@ plugins {
 	alias(libs.plugins.kotlin.serialization)
 	alias(libs.plugins.compose.multiplatform)
 	alias(libs.plugins.compose.compiler)
+	alias(libs.plugins.kover)
 }
 
 kotlin {
@@ -42,6 +43,16 @@ kotlin {
 		}
 		named("desktopTest") {
 			dependencies { implementation(kotlin("test")) }
+		}
+	}
+}
+
+kover {
+	reports {
+		verify {
+			rule("Studio line coverage") {
+				minBound(20)
+			}
 		}
 	}
 }

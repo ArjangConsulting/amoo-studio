@@ -144,6 +144,8 @@ data class ConsoleState(
 	val input: String = "",
 	val entries: List<ConsoleEntry> = emptyList(),
 	val operation: ConsoleOperation = ConsoleOperation.Idle,
+	val suggestionIndex: Int = 0,
+	val historyIndex: Int? = null,
 )
 
 @Serializable data class ConsoleEntry(val id: String, val command: String, val output: String, val failed: Boolean = false)
@@ -211,6 +213,8 @@ sealed interface StudioEvent {
 	data object ClearChat : StudioEvent
 	data class ChangeConsoleInput(val value: String) : StudioEvent
 	data class ChooseConsoleSuggestion(val command: String) : StudioEvent
+	data class MoveConsoleSuggestion(val delta: Int) : StudioEvent
+	data class NavigateConsoleHistory(val delta: Int) : StudioEvent
 	data object ExecuteConsoleCommand : StudioEvent
 	data object ConsoleCommandStarted : StudioEvent
 	data class ConsoleCommandFinished(val entry: ConsoleEntry) : StudioEvent
@@ -260,8 +264,12 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.RemoveTestStep -> copy(test = test.copy(steps = test.steps.filterNot { it.id == event.id }), isTestDirty = true)
 	is StudioEvent.AddTestPlanOperation -> {
 		val command = event.command.trim()
+		val parsed = parseToolCommand(command)
 		if (command.isEmpty()) this else copy(
-			test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio-console", "1", emptyList())).let { it.copy(operations = it.operations + command) }),
+			test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio-console", "1")).let { plan ->
+				if (parsed != null) plan.copy(toolOperations = plan.toolOperations + ToolOperation("operation-${nextOperationId(plan.toolOperations)}", parsed.tool, parsed.arguments))
+				else plan.copy(operations = plan.operations + command)
+			}),
 			isTestDirty = true,
 			notice = "Added command to ${test.name}",
 		)
@@ -302,11 +310,19 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = event.message)
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())
-	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value))
-	is StudioEvent.ChooseConsoleSuggestion -> copy(console = console.copy(input = event.command))
+	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value, suggestionIndex = 0, historyIndex = null))
+	is StudioEvent.ChooseConsoleSuggestion -> copy(console = console.copy(input = event.command, suggestionIndex = 0, historyIndex = null))
+	is StudioEvent.MoveConsoleSuggestion -> copy(console = console.copy(suggestionIndex = (console.suggestionIndex + event.delta).coerceAtLeast(0)))
+	is StudioEvent.NavigateConsoleHistory -> {
+		if (console.entries.isEmpty()) this else {
+			val current = console.historyIndex ?: console.entries.size
+			val next = (current + event.delta).coerceIn(0, console.entries.size)
+			copy(console = console.copy(historyIndex = next.takeIf { it < console.entries.size }, input = console.entries.getOrNull(next)?.command.orEmpty()))
+		}
+	}
 	StudioEvent.ExecuteConsoleCommand -> this
 	StudioEvent.ConsoleCommandStarted -> copy(console = console.copy(operation = ConsoleOperation.Running), notice = null)
-	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(input = "", entries = console.entries + event.entry, operation = ConsoleOperation.Idle))
+	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(input = "", entries = console.entries + event.entry, operation = ConsoleOperation.Idle, suggestionIndex = 0, historyIndex = null))
 	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
 	StudioEvent.ClearConsole -> copy(console = ConsoleState())
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
@@ -377,7 +393,38 @@ fun StudioState.consoleSuggestions(): List<ConsoleSuggestion> {
 		add(ConsoleSuggestion("sessions list", "List recent Amoo sessions"))
 		add(ConsoleSuggestion("reports list", "List available reports"))
 		selectedProviderId?.let { add(ConsoleSuggestion("providers inspect $it", "Inspect the selected AI provider profile")) }
+		if (selectedDeviceId != null) {
+			add(ConsoleSuggestion("tap_element label=\"Sign in\"", "Tap an element on the selected device"))
+			add(ConsoleSuggestion("set_text id=email value=\"person@example.com\"", "Fill a text field"))
+			add(ConsoleSuggestion("assert_visible id=home", "Assert that an element is visible"))
+			add(ConsoleSuggestion("take_screenshot", "Capture the current device screen"))
+		}
 	}
 	val terms = console.input.trim().lowercase().split(Regex("\\s+")).filter(String::isNotBlank)
 	return catalog.distinctBy { it.command }.filter { suggestion -> terms.all { it in suggestion.command.lowercase() || it in suggestion.description.lowercase() } }.take(8)
+}
+
+data class ParsedToolCommand(val tool: String, val arguments: Map<String, String>)
+
+fun parseToolCommand(command: String): ParsedToolCommand? {
+	val tokens = Regex("""(?:[^\s"']|"[^"]*"|'[^']*')+""").findAll(command.trim()).map { match ->
+		match.value.removeSurrounding("\"").removeSurrounding("'")
+	}.toList()
+	val tool = tokens.firstOrNull() ?: return null
+	val definition = TOOL_CATALOG.firstOrNull { it.name == tool } ?: return null
+	val arguments = tokens.drop(1).mapNotNull { token ->
+		val equals = token.indexOf('=')
+		if (equals <= 0) null else token.substring(0, equals) to token.substring(equals + 1).removeSurrounding("\"").removeSurrounding("'")
+	}.toMap()
+	val draft = ToolOperationDraft(tool, arguments)
+	return if (draft.validationError() == null && arguments.keys.all { key -> definition.arguments.any { it.name == key } }) ParsedToolCommand(tool, arguments) else null
+}
+
+fun StudioState.consoleValidationError(): String? {
+	val command = console.input.trim()
+	if (command.isEmpty()) return null
+	if (parseToolCommand(command) != null) return null
+	if (command in setOf("help", "devices list", "tests validate", "tests run", "sessions list", "reports list") || command.startsWith("devices inspect ") || command.startsWith("providers inspect ")) return null
+	if (TOOL_CATALOG.any { command.startsWith(it.name) }) return "Check required arguments and use name=value syntax"
+	return "Unknown command. Choose a suggestion or run help."
 }

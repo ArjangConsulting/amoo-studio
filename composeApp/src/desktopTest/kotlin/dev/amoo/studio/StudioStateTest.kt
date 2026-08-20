@@ -157,6 +157,38 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `console parses quoted tool arguments into typed plan operations`() {
+		val state = StudioState().reduce(StudioEvent.AddTestPlanOperation("tap_element label=\"Sign in\""))
+
+		assertEquals(
+			ToolOperation("operation-1", "tap_element", mapOf("label" to "Sign in")),
+			state.test.compiledPlan?.toolOperations?.single(),
+		)
+		assertEquals(emptyList(), state.test.compiledPlan?.operations)
+	}
+
+	@Test
+	fun `console history navigates newest commands first`() {
+		val entries = listOf(
+			ConsoleEntry("1", "devices list", "ok"),
+			ConsoleEntry("2", "assert_visible id=home", "ok"),
+		)
+
+		val newest = StudioState(console = ConsoleState(entries = entries)).reduce(StudioEvent.NavigateConsoleHistory(-1))
+		val older = newest.reduce(StudioEvent.NavigateConsoleHistory(-1))
+
+		assertEquals("assert_visible id=home", newest.console.input)
+		assertEquals("devices list", older.console.input)
+	}
+
+	@Test
+	fun `invalid tool command has inline remediation`() {
+		val state = StudioState(console = ConsoleState(input = "set_text id=email"))
+
+		assertEquals("Check required arguments and use name=value syntax", state.consoleValidationError())
+	}
+
+	@Test
 	fun `completed test run retains session and report references`() {
 		val running = StudioState(testExecution = TestExecution.Running("Running"))
 

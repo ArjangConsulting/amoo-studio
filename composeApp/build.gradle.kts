@@ -9,6 +9,7 @@ val packagingArch = when (System.getProperty("os.arch").lowercase()) {
 	"aarch64", "arm64" -> "arm64"
 	else -> "x64"
 }
+val packagedAmoo = layout.projectDirectory.file("app-resources/$packagingOs-$packagingArch/amoo")
 
 plugins {
 	alias(libs.plugins.kotlin.multiplatform)
@@ -74,6 +75,20 @@ compose.desktop {
 				minimumSystemVersion = "15.0"
 				iconFile.set(project.file("app-resources/icon.icns"))
 			}
+		}
+	}
+}
+
+tasks.register("verifyEmbeddedAmoo") {
+	group = "distribution"
+	description = "Fails unless the current platform's Amoo executable is staged for release packaging."
+	doLast {
+		val binary = packagedAmoo.asFile
+		check(binary.isFile && binary.length() > 0) {
+			"Missing embedded Amoo executable: ${binary.absolutePath}"
+		}
+		check(!System.getProperty("os.name").startsWith("Windows", ignoreCase = true) && binary.canExecute()) {
+			"Embedded Amoo executable is not executable: ${binary.absolutePath}"
 		}
 	}
 }

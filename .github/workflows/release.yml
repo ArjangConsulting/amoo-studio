@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      studio_tag:
+        description: Studio release tag (for example v1.0.0)
+        required: true
+        type: string
+      amoo_tag:
+        description: Amoo release tag whose verified binaries will be embedded
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos
+            arch: arm64
+            package_tasks: :composeApp:packageDmg :composeApp:packagePkg
+            outputs: composeApp/build/compose/binaries/main/{dmg,pkg}/*
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            package_tasks: :composeApp:packageDeb
+            outputs: composeApp/build/compose/binaries/main/deb/*
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AMOO_ASSET: amoo-${{ matrix.platform }}-${{ matrix.arch }}
+      AMOO_TAG: ${{ inputs.amoo_tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Download and verify Amoo
+        shell: bash
+        run: |
+          mkdir -p "composeApp/app-resources/${{ matrix.platform }}-${{ matrix.arch }}"
+          gh release download "$AMOO_TAG" --repo ArjangConsulting/mobile-testing --pattern "$AMOO_ASSET" --pattern "$AMOO_ASSET.sha256"
+          expected="$(cut -d ' ' -f 1 "$AMOO_ASSET.sha256")"
+          actual="$(shasum -a 256 "$AMOO_ASSET" | cut -d ' ' -f 1)"
+          test "$actual" = "$expected"
+          install -m 755 "$AMOO_ASSET" "composeApp/app-resources/${{ matrix.platform }}-${{ matrix.arch }}/amoo"
+      - name: Package Studio
+        run: ./gradlew :composeApp:verifyEmbeddedAmoo ${{ matrix.package_tasks }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Amoo-Studio-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ matrix.outputs }}
+          if-no-files-found: error
+
+  draft-release:
+    needs: package
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: Create draft GitHub release
+        run: gh release create "${{ inputs.studio_tag }}" release-artifacts/* --draft --target "$GITHUB_SHA" --generate-notes --title "Amoo Studio ${{ inputs.studio_tag }}"

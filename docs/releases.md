@@ -6,8 +6,8 @@ A Studio release pins three independent versions:
 - embedded Amoo executable version
 - `process-rpc-kotlin` dependency version
 
-Release automation downloads the Amoo binary and checksum from an Amoo GitHub release, verifies the
-checksum, and stages the executable under the matching Compose resource directory:
+The manual `Release` workflow downloads the Amoo binary and checksum from an Amoo GitHub release,
+verifies the checksum, and stages the executable under the matching Compose resource directory:
 
 ```text
 composeApp/app-resources/macos-arm64/amoo
@@ -20,6 +20,12 @@ Gradle selects exactly one directory from the build host's operating system and 
 selected executable is therefore staged as `<application resources>/amoo`, which is the location
 resolved by `process-rpc-kotlin` at runtime.
 
-macOS releases produce signed and notarized DMG/PKG artifacts. Linux releases produce DEB/RPM
-artifacts, with DEB used for the baseline CI packaging check. Runtime compatibility is still validated by
-`system.handshake`; version pinning is not a substitute for protocol negotiation.
+The first automated release targets Apple Silicon macOS (DMG/PKG) and x64 Linux (DEB). Amoo releases
+must provide `amoo-macos-arm64`, `amoo-linux-x64`, and a `.sha256` asset alongside each executable.
+The workflow creates a draft GitHub release so the artifacts and platform signing can be reviewed
+before publication. Runtime compatibility is still validated by `system.handshake`; version pinning
+is not a substitute for protocol negotiation.
+
+CI packages without embedding Amoo so pull requests can validate `jpackage` independently of an Amoo
+release. The release workflow additionally runs `verifyEmbeddedAmoo` and cannot publish an empty GUI
+shell.

@@ -15,6 +15,7 @@ Current methods:
 | `system.health` | Backend readiness |
 | `devices.list` | Discover running and available simulators, emulators, and devices |
 | `devices.start` | Start a selected simulator or emulator |
+| `devices.create` | Create an iOS simulator or Android emulator from guided configuration |
 | `apps.buildInstallRun` | Build, install, and launch an app on the selected target |
 | `apps.reinstallRun` | Reinstall the last build artifact without rebuilding |
 | `apps.resetData` | Erase app data after explicit Studio approval |
@@ -27,6 +28,10 @@ Current methods:
 and an environment-variable name, never secret values. Amoo resolves the environment variable and
 owns provider networking. Session and report methods will be added to the Swift-owned protocol.
 Their Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.
+
+`devices.create` accepts `platform`, `name`, `runtime`, and `deviceType`, returning the standard
+operation result. Amoo validates tool availability and installed images; Studio does not invoke Xcode,
+Android SDK tools, or ShipItSwifty directly.
 
 `repl.execute` accepts a command plus the active test, selected device ID, and selected provider ID;
 it returns `{ "output": "..." }`. Output is structured protocol data rendered by the console, never

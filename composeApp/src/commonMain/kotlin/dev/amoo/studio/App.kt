@@ -44,6 +44,7 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 				confirmButton = { Button({ onEvent(StudioEvent.ResolveApproval(true)) }) { Text("Erase data") } },
 				dismissButton = { TextButton({ onEvent(StudioEvent.ResolveApproval(false)) }) { Text("Cancel") } },
 			) }
+			state.createDevice?.let { form -> CreateDeviceDialog(state, form, onEvent) }
 		}
 	}
 }
@@ -69,6 +70,7 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 	Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
 			Button({ onEvent(StudioEvent.RefreshDevices) }, enabled = canListDevices && state.deviceOperation is DeviceOperation.Idle) { Text("Refresh devices") }
+			OutlinedButton({ onEvent(StudioEvent.RequestCreateDevice) }, enabled = state.connection.supports("devices.create") && state.deviceOperation is DeviceOperation.Idle) { Text("Create device") }
 			if (state.deviceOperation is DeviceOperation.Working) { CircularProgressIndicator(Modifier.size(20.dp)); Text(state.deviceOperation.message) }
 		}
 		if (!canListDevices) Text("Device discovery is unavailable in the connected Amoo version.", color = MaterialTheme.colorScheme.error)
@@ -96,6 +98,24 @@ private fun AmooStudioTheme(themeMode: ThemeMode, content: @Composable () -> Uni
 		state.lastBuildArtifact?.let { Text("Last artifact: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 		Spacer(Modifier.height(16.dp))
 	}
+}
+
+@Composable private fun CreateDeviceDialog(state: StudioState, form: CreateDeviceState, onEvent: (StudioEvent) -> Unit) {
+	AlertDialog(
+		onDismissRequest = { onEvent(StudioEvent.CancelCreateDevice) },
+		title = { Text("Create simulator or emulator") },
+		text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+			Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+				TestPlatform.entries.filter(state.hostPlatform::supports).forEach { platform -> FilterChip(form.platform == platform, { onEvent(StudioEvent.ChangeCreateDevicePlatform(platform)) }, { Text(platform.label) }) }
+			}
+			OutlinedTextField(form.name, { onEvent(StudioEvent.ChangeCreateDeviceName(it)) }, label = { Text("Name") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "Amoo iPhone" else "Amoo Pixel") }, singleLine = true)
+			OutlinedTextField(form.runtime, { onEvent(StudioEvent.ChangeCreateDeviceRuntime(it)) }, label = { Text("Runtime / system image") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iOS 26.0" else "android-36") }, singleLine = true)
+			OutlinedTextField(form.deviceType, { onEvent(StudioEvent.ChangeCreateDeviceType(it)) }, label = { Text("Device type") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iPhone 17" else "pixel_9") }, singleLine = true)
+			Text("Amoo validates installed runtimes and returns remediation when an image or device type is unavailable.", style = MaterialTheme.typography.bodySmall)
+		} },
+		confirmButton = { Button({ onEvent(StudioEvent.ConfirmCreateDevice) }, enabled = form.name.isNotBlank() && form.runtime.isNotBlank() && form.deviceType.isNotBlank()) { Text("Create") } },
+		dismissButton = { TextButton({ onEvent(StudioEvent.CancelCreateDevice) }) { Text("Cancel") } },
+	)
 }
 
 @Composable private fun DeviceCard(device: StudioDevice, selected: Boolean, canStart: Boolean, onEvent: (StudioEvent) -> Unit) {

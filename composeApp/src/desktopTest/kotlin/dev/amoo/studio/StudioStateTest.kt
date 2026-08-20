@@ -168,4 +168,21 @@ class StudioStateTest {
 		assertEquals("report-1", updated.selectedReportId)
 		assertEquals(false, updated.reportsLoading)
 	}
+
+	@Test
+	fun `device creation defaults to host supported platform`() {
+		val updated = StudioState(hostPlatform = HostPlatform.Linux).reduce(StudioEvent.RequestCreateDevice)
+
+		assertEquals(TestPlatform.Android, updated.createDevice?.platform)
+	}
+
+	@Test
+	fun `confirming device creation closes form and starts progress`() {
+		val state = StudioState(createDevice = CreateDeviceState(TestPlatform.Android, "Pixel", "android-36", "pixel_9"))
+
+		val updated = state.reduce(StudioEvent.ConfirmCreateDevice)
+
+		assertEquals(null, updated.createDevice)
+		assertEquals(DeviceOperation.Working("Creating device…"), updated.deviceOperation)
+	}
 }

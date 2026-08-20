@@ -31,6 +31,7 @@ data class StudioState(
 	val schemeOrModule: String = "",
 	val lastBuildArtifact: String? = null,
 	val pendingApproval: PendingApproval? = null,
+	val createDevice: CreateDeviceState? = null,
 )
 
 enum class ThemeMode(val label: String) { System("System"), Light("Light"), Dark("Dark") }
@@ -117,6 +118,7 @@ data class StudioDevice(
 )
 
 @Serializable enum class DeviceStatus { Running, Available }
+data class CreateDeviceState(val platform: TestPlatform, val name: String = "", val runtime: String = "", val deviceType: String = "")
 sealed interface DeviceOperation { data object Idle : DeviceOperation; data class Working(val message: String) : DeviceOperation }
 data class PendingApproval(val title: String, val message: String, val action: ApprovedAction)
 sealed interface ApprovedAction { data object ResetAppData : ApprovedAction }
@@ -171,6 +173,13 @@ sealed interface StudioEvent {
 	data class DevicesLoaded(val devices: List<StudioDevice>) : StudioEvent
 	data class SelectDevice(val id: String) : StudioEvent
 	data class StartDevice(val id: String) : StudioEvent
+	data object RequestCreateDevice : StudioEvent
+	data class ChangeCreateDevicePlatform(val value: TestPlatform) : StudioEvent
+	data class ChangeCreateDeviceName(val value: String) : StudioEvent
+	data class ChangeCreateDeviceRuntime(val value: String) : StudioEvent
+	data class ChangeCreateDeviceType(val value: String) : StudioEvent
+	data object ConfirmCreateDevice : StudioEvent
+	data object CancelCreateDevice : StudioEvent
 	data object ChooseProjectPath : StudioEvent
 	data class ChangeProjectPath(val value: String) : StudioEvent
 	data class ChangeAppId(val value: String) : StudioEvent
@@ -228,6 +237,13 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.DevicesLoaded -> copy(devices = event.devices, deviceOperation = DeviceOperation.Idle, selectedDeviceId = selectedDeviceId?.takeIf { id -> event.devices.any { it.id == id } })
 	is StudioEvent.SelectDevice -> copy(selectedDeviceId = event.id)
 	is StudioEvent.StartDevice -> copy(selectedDeviceId = event.id, deviceOperation = DeviceOperation.Working("Starting device…"))
+	StudioEvent.RequestCreateDevice -> copy(createDevice = CreateDeviceState(hostPlatform.defaultTestPlatform))
+	is StudioEvent.ChangeCreateDevicePlatform -> copy(createDevice = createDevice?.copy(platform = event.value))
+	is StudioEvent.ChangeCreateDeviceName -> copy(createDevice = createDevice?.copy(name = event.value))
+	is StudioEvent.ChangeCreateDeviceRuntime -> copy(createDevice = createDevice?.copy(runtime = event.value))
+	is StudioEvent.ChangeCreateDeviceType -> copy(createDevice = createDevice?.copy(deviceType = event.value))
+	StudioEvent.ConfirmCreateDevice -> copy(createDevice = null, deviceOperation = DeviceOperation.Working("Creating device…"))
+	StudioEvent.CancelCreateDevice -> copy(createDevice = null)
 	StudioEvent.ChooseProjectPath, StudioEvent.BuildInstallAndRun, StudioEvent.ReinstallAndRun -> this
 	is StudioEvent.ChangeProjectPath -> copy(projectPath = event.value)
 	is StudioEvent.ChangeAppId -> copy(appId = event.value)

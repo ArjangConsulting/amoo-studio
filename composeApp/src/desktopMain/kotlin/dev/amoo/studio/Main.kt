@@ -95,6 +95,7 @@ private class StudioController(
 
 	fun onEvent(event: StudioEvent) {
 		val approvedAction = state.value.pendingApproval?.action
+		val createDeviceRequest = state.value.createDevice
 		state.value = state.value.reduce(event)
 		when (event) {
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
@@ -118,6 +119,7 @@ private class StudioController(
 			}
 			StudioEvent.RefreshReports -> refreshReports()
 			is StudioEvent.StartDevice -> runDeviceOperation("Starting device…", "devices.start", buildJsonObject { put("id", event.id) }, refreshAfter = true)
+			StudioEvent.ConfirmCreateDevice -> createDeviceRequest?.let(::createDevice)
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
 			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
 			StudioEvent.ReinstallAndRun -> reinstallAndRun()
@@ -151,6 +153,15 @@ private class StudioController(
 		if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
 			state.value = state.value.reduce(StudioEvent.ChangeProjectPath(chooser.selectedFile.absolutePath))
 		}
+	}
+
+	private fun createDevice(request: CreateDeviceState) {
+		runDeviceOperation("Creating device…", "devices.create", buildJsonObject {
+			put("platform", request.platform.name.lowercase())
+			put("name", request.name.trim())
+			put("runtime", request.runtime.trim())
+			put("deviceType", request.deviceType.trim())
+		}, refreshAfter = true)
 	}
 
 	private fun buildInstallAndRun() {

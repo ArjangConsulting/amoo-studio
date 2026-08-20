@@ -4,6 +4,9 @@ A pure Compose Multiplatform desktop client powered by the bundled Swift `amoo` 
 Studio owns presentation state only; device control, sessions, MCP tools, and model integration
 remain in Amoo.
 
+Amoo Studio supports macOS and Linux. macOS hosts can run iOS and Android workflows; Linux hosts
+run Android workflows through the same Amoo/ShipItSwifty process boundary.
+
 The reusable subprocess transport is the versioned
 [process-rpc-kotlin](https://github.com/maniramezan/process-rpc-kotlin) library dependency.
 

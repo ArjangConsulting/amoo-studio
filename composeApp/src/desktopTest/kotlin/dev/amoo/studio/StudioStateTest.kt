@@ -1,5 +1,6 @@
 package dev.amoo.studio
 
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -50,5 +51,39 @@ class StudioStateTest {
 
 		assertEquals(provider, updated.providers.first { it.id == provider.id })
 		assertEquals(provider.id, updated.selectedProviderId)
+	}
+
+	@Test
+	fun `new tests default to Android on Linux`() {
+		val updated = StudioState(hostPlatform = HostPlatform.Linux).reduce(StudioEvent.NewTest)
+
+		assertEquals(TestPlatform.Android, updated.test.platform)
+	}
+
+	@Test
+	fun `Linux supports Android but not iOS workflows`() {
+		assertEquals(true, HostPlatform.Linux.supports(TestPlatform.Android))
+		assertEquals(false, HostPlatform.Linux.supports(TestPlatform.Ios))
+	}
+
+	@Test
+	fun `protocol features require advertised capabilities`() {
+		val ready = ConnectionState.Ready("0.1.0", 1, listOf("devices.list"))
+
+		assertEquals(true, ready.supports("devices.list"))
+		assertEquals(false, ready.supports("apps.resetData"))
+		assertEquals(false, ConnectionState.Starting.supports("devices.list"))
+	}
+
+	@Test
+	fun `existing version one test files remain readable`() {
+		val source = """{"formatVersion":1,"name":"Sign in","description":"","platform":"Android","steps":[{"id":"step-1","instruction":"Tap sign in","expected":"Home"}]}"""
+
+		val test = Json.decodeFromString<AmooTest>(source)
+
+		assertEquals("Sign in", test.name)
+		assertEquals(null, test.requirements)
+		assertEquals(null, test.compiledPlan)
+		assertEquals(emptyMap(), test.metadata)
 	}
 }

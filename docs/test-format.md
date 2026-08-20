@@ -11,6 +11,10 @@ will translate these steps into its provider-neutral tools.
   "name": "Sign in",
   "description": "A returning user can sign in",
   "platform": "Ios",
+  "requirements": {
+    "appId": "dev.example.app",
+    "deviceName": "iPhone 17"
+  },
   "steps": [
     {
       "id": "step-1",
@@ -24,6 +28,11 @@ will translate these steps into its provider-neutral tools.
 Readers must reject unsupported major `formatVersion` values. New optional fields may be added within
 a version; readers should ignore fields they do not understand. Step IDs are stable within a file and
 exist for UI identity and future report correlation.
+
+Optional `requirements` describe the app, project, or device needed to run the test. An optional
+`compiledPlan` may cache backend-generated tool operations together with its compiler identity and
+version; authored steps remain the source of truth. `metadata` is a string map for product-neutral
+annotations. All three fields are optional so existing version 1 files remain valid.
 
 Provider profiles are not part of `.amootest` files. Studio stores provider endpoints, model names,
 and API-key environment-variable names in user preferences. API key values are never written by Studio.

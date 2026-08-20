@@ -46,31 +46,38 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 
 @Composable private fun DevicesContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val selected = state.devices.firstOrNull { it.id == state.selectedDeviceId }
+	val canListDevices = state.connection.supports("devices.list")
+	val canStartDevices = state.connection.supports("devices.start")
+	val canBuild = state.connection.supports("apps.buildInstallRun")
+	val canReinstall = state.connection.supports("apps.reinstallRun")
+	val canResetData = state.connection.supports("apps.resetData")
 	Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-			Button({ onEvent(StudioEvent.RefreshDevices) }, enabled = state.deviceOperation is DeviceOperation.Idle) { Text("Refresh devices") }
+			Button({ onEvent(StudioEvent.RefreshDevices) }, enabled = canListDevices && state.deviceOperation is DeviceOperation.Idle) { Text("Refresh devices") }
 			if (state.deviceOperation is DeviceOperation.Working) { CircularProgressIndicator(Modifier.size(20.dp)); Text(state.deviceOperation.message) }
 		}
+		if (!canListDevices) Text("Device discovery is unavailable in the connected Amoo version.", color = MaterialTheme.colorScheme.error)
 		Text("Running", style = MaterialTheme.typography.titleLarge)
 		val running = state.devices.filter { it.status == DeviceStatus.Running }
 		if (running.isEmpty()) Text("No running simulators, emulators, or connected devices found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		running.forEach { device -> key(device.id) { DeviceCard(device, device.id == state.selectedDeviceId, false, onEvent) } }
 		Text("Available to start", style = MaterialTheme.typography.titleLarge)
 		val available = state.devices.filter { it.status == DeviceStatus.Available }
-		if (available.isEmpty()) Text("No stopped simulators or emulators found. Install a runtime in Xcode or create an Android Virtual Device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-		available.forEach { device -> key(device.id) { DeviceCard(device, device.id == state.selectedDeviceId, true, onEvent) } }
+		if (available.isEmpty()) Text(if (state.hostPlatform == HostPlatform.MacOS) "No stopped simulators or emulators found. Install a runtime in Xcode or create an Android Virtual Device." else "No stopped Android emulators found. Create an Android Virtual Device and refresh.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		available.forEach { device -> key(device.id) { DeviceCard(device, device.id == state.selectedDeviceId, canStartDevices, onEvent) } }
 		HorizontalDivider()
 		Text("App project", style = MaterialTheme.typography.titleLarge)
-		OutlinedTextField(state.projectPath, { onEvent(StudioEvent.ChangeProjectPath(it)) }, label = { Text("Xcode or Gradle project path") }, trailingIcon = { TextButton({ onEvent(StudioEvent.ChooseProjectPath) }) { Text("Choose…") } }, modifier = Modifier.fillMaxWidth())
+		OutlinedTextField(state.projectPath, { onEvent(StudioEvent.ChangeProjectPath(it)) }, label = { Text(if (state.hostPlatform == HostPlatform.MacOS) "Xcode or Gradle project path" else "Gradle project path") }, trailingIcon = { TextButton({ onEvent(StudioEvent.ChooseProjectPath) }) { Text("Choose…") } }, modifier = Modifier.fillMaxWidth())
 		Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
 			OutlinedTextField(state.appId, { onEvent(StudioEvent.ChangeAppId(it)) }, label = { Text("Bundle ID / application ID") }, modifier = Modifier.weight(1f))
 			OutlinedTextField(state.schemeOrModule, { onEvent(StudioEvent.ChangeSchemeOrModule(it)) }, label = { Text(if (selected?.platform == TestPlatform.Android) "Gradle module" else "Xcode scheme") }, modifier = Modifier.weight(1f))
 		}
 		Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-			Button({ onEvent(StudioEvent.BuildInstallAndRun) }, enabled = selected != null && state.projectPath.isNotBlank() && state.appId.isNotBlank() && state.deviceOperation is DeviceOperation.Idle) { Text("Build, install & run") }
-			OutlinedButton({ onEvent(StudioEvent.ReinstallAndRun) }, enabled = selected != null && state.lastBuildArtifact != null && state.deviceOperation is DeviceOperation.Idle) { Text("Reinstall without building") }
-			OutlinedButton({ onEvent(StudioEvent.RequestResetAppData) }, enabled = selected != null && state.appId.isNotBlank() && state.deviceOperation is DeviceOperation.Idle, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Erase app data") }
+			Button({ onEvent(StudioEvent.BuildInstallAndRun) }, enabled = canBuild && selected != null && state.hostPlatform.supports(selected.platform) && state.projectPath.isNotBlank() && state.appId.isNotBlank() && state.deviceOperation is DeviceOperation.Idle) { Text("Build, install & run") }
+			OutlinedButton({ onEvent(StudioEvent.ReinstallAndRun) }, enabled = canReinstall && selected != null && state.hostPlatform.supports(selected.platform) && state.lastBuildArtifact != null && state.deviceOperation is DeviceOperation.Idle) { Text("Reinstall without building") }
+			OutlinedButton({ onEvent(StudioEvent.RequestResetAppData) }, enabled = canResetData && selected != null && state.hostPlatform.supports(selected.platform) && state.appId.isNotBlank() && state.deviceOperation is DeviceOperation.Idle, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Erase app data") }
 		}
+		if (selected != null && !state.hostPlatform.supports(selected.platform)) Text("${selected.platform.label} workflows require macOS. Amoo Studio on ${state.hostPlatform.label} supports Android targets.", color = MaterialTheme.colorScheme.error)
 		state.lastBuildArtifact?.let { Text("Last artifact: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 		Spacer(Modifier.height(16.dp))
 	}
@@ -99,6 +106,10 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 @Composable private fun OverviewContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
 		ConnectionCard(state.connection, onEvent)
+		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+			Text("${state.hostPlatform.label} workspace", style = MaterialTheme.typography.titleMedium)
+			Text(if (state.hostPlatform == HostPlatform.MacOS) "iOS and Android workflows are available when advertised by Amoo." else "Android workflows are available. iOS and Xcode require macOS.")
+		} }
 		Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
 			FeatureCard("Create a test", "Write reusable steps and expectations in a portable .amootest file.", Modifier.weight(1f)) { onEvent(StudioEvent.NewTest) }
 			FeatureCard("Connect an AI", "Configure OpenAI, Claude, Ollama, or an OpenAI-compatible provider.", Modifier.weight(1f)) { onEvent(StudioEvent.SelectSection(StudioSection.Settings)) }
@@ -121,7 +132,7 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth())
 			Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 				Text("Platform", fontWeight = FontWeight.Medium)
-				TestPlatform.entries.forEach { platform -> FilterChip(state.test.platform == platform, { onEvent(StudioEvent.ChangeTestPlatform(platform)) }, { Text(platform.label) }) }
+				TestPlatform.entries.filter(state.hostPlatform::supports).forEach { platform -> FilterChip(state.test.platform == platform, { onEvent(StudioEvent.ChangeTestPlatform(platform)) }, { Text(platform.label) }) }
 			}
 			Text("Steps", style = MaterialTheme.typography.titleLarge)
 			state.test.steps.forEachIndexed { index, step -> key(step.id) { StepCard(index, step, state.test.steps.size > 1, onEvent) } }

@@ -1,5 +1,15 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
+val packagingOs = when {
+	System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "macos"
+	System.getProperty("os.name").startsWith("Linux", ignoreCase = true) -> "linux"
+	else -> "unsupported"
+}
+val packagingArch = when (System.getProperty("os.arch").lowercase()) {
+	"aarch64", "arm64" -> "arm64"
+	else -> "x64"
+}
+
 plugins {
 	alias(libs.plugins.kotlin.multiplatform)
 	alias(libs.plugins.kotlin.serialization)
@@ -45,7 +55,7 @@ compose.desktop {
 			packageVersion = "0.1.0"
 			description = "Desktop client for Amoo mobile testing"
 			vendor = "Amoo"
-			appResourcesRootDir.set(project.layout.projectDirectory.dir("app-resources"))
+			appResourcesRootDir.set(project.layout.projectDirectory.dir("app-resources/$packagingOs-$packagingArch"))
 			macOS {
 				bundleID = "dev.amoo.studio"
 				appCategory = "public.app-category.developer-tools"

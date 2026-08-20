@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 def read_response(process: subprocess.Popen[bytes]) -> dict:
@@ -26,8 +27,11 @@ def read_response(process: subprocess.Popen[bytes]) -> dict:
     return json.loads(process.stdout.read(length))
 
 
-def call(process: subprocess.Popen[bytes], request_id: int, method: str) -> dict:
-    payload = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method}).encode()
+def call(process: subprocess.Popen[bytes], request_id: int, method: str, params: dict | None = None) -> dict:
+    request = {"jsonrpc": "2.0", "id": request_id, "method": method}
+    if params is not None:
+        request["params"] = params
+    payload = json.dumps(request).encode()
     process.stdin.write(f"Content-Length: {len(payload)}\r\n\r\n".encode() + payload)
     process.stdin.flush()
     response = read_response(process)
@@ -52,6 +56,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--amoo", help="Path to the local Amoo executable")
     parser.add_argument("--require-device", action="store_true", help="Fail unless a running simulator, emulator, or device is discovered")
+    parser.add_argument("--exercise-tools", action="store_true", help="Run a real screenshot operation and verify its report artifact")
     args = parser.parse_args()
     executable = resolve_amoo(args.amoo)
     process = subprocess.Popen(
@@ -69,8 +74,45 @@ def main() -> int:
         mcp = call(process, 4, "mcp.status")
         if health.get("status") != "ready" or not mcp.get("available"):
             raise RuntimeError("Amoo health or MCP readiness check failed")
-        if args.require_device and not any(device.get("status") == "Running" for device in devices):
+        running = next((device for device in devices if device.get("status") == "Running"), None)
+        if args.exercise_tools and not running:
+            available = next((device for device in devices if device.get("status") == "Available"), None)
+            if available:
+                call(process, 5, "devices.start", {"id": available["id"]})
+                devices = call(process, 6, "devices.list").get("devices", [])
+                running = next((device for device in devices if device.get("status") == "Running"), None)
+        if args.require_device and not running:
             raise RuntimeError("No running simulator, emulator, or device was discovered")
+        if args.exercise_tools:
+            if not running:
+                raise RuntimeError("--exercise-tools requires a running device")
+            test = {
+                "formatVersion": 1,
+                "name": "Studio local tool smoke",
+                "description": "Exercises the real driver boundary",
+                "platform": running["platform"],
+                "steps": [{"id": "step-1", "instruction": "Capture the current screen", "expected": "A screenshot artifact is produced"}],
+                "compiledPlan": {
+                    "compiler": "studio-smoke",
+                    "compilerVersion": "1",
+                    "toolOperations": [{"id": "operation-1", "tool": "take_screenshot", "arguments": {}}],
+                },
+            }
+            started = call(process, 7, "tests.start", {"test": test, "deviceId": running["id"]})
+            request_id = 8
+            while True:
+                status = call(process, request_id, "tests.status", {"runId": started["runId"]})
+                request_id += 1
+                if status["state"] != "Running":
+                    break
+                time.sleep(0.25)
+            if status["state"] != "Passed":
+                raise RuntimeError(f"Tool smoke failed: {status['message']}")
+            reports = call(process, request_id, "reports.list")["reports"]
+            report = next((item for item in reports if item["id"] == status["reportId"]), None)
+            if not report or not report.get("artifacts") or not all(Path(path).is_file() for path in report["artifacts"]):
+                raise RuntimeError("Tool smoke passed without a readable screenshot artifact")
+            print(f"PASS: real {running['platform']} tool execution produced {report['artifacts'][0]}")
         print(f"PASS: Amoo {handshake.get('version')} protocol 1; {len(devices)} device(s); MCP {mcp.get('transport')}")
         return 0
     finally:

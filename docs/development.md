@@ -35,7 +35,7 @@ Amoo process boundary and device discovery instead:
 cd ../mobile-testing
 swift build --product amoo
 cd ../amoo-studio
-./scripts/studio-protocol-smoke.py --require-device
+./scripts/studio-protocol-smoke.py --require-device --exercise-tools
 AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
 ```
 

@@ -12,6 +12,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.maniramezan.kmpcomponents.KmpTheme
@@ -297,7 +302,28 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 				}
 			}
 		}
-		OutlinedTextField(state.console.input, { onEvent(StudioEvent.ChangeConsoleInput(it)) }, label = { Text("Command") }, placeholder = { Text("devices list") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+		OutlinedTextField(
+			state.console.input,
+			{ onEvent(StudioEvent.ChangeConsoleInput(it)) },
+			label = { Text("Command") },
+			placeholder = { Text("devices list") },
+			supportingText = { Text("Tab completes the first suggestion · Enter runs") },
+			singleLine = true,
+			modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+				if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+				when (event.key) {
+					Key.Tab -> suggestions.firstOrNull()?.let {
+						onEvent(StudioEvent.ChooseConsoleSuggestion(it.command))
+						true
+					} ?: false
+					Key.Enter -> if (canExecute && state.console.input.isNotBlank() && state.console.operation == ConsoleOperation.Idle) {
+						onEvent(StudioEvent.ExecuteConsoleCommand)
+						true
+					} else false
+					else -> false
+				}
+			},
+		)
 		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
 			OutlinedButton({ onEvent(StudioEvent.AddTestPlanOperation(state.console.input)) }, enabled = state.console.input.isNotBlank() && state.console.operation == ConsoleOperation.Idle) { Text("Add to test plan") }
 			if (state.console.operation == ConsoleOperation.Running) OutlinedButton({ onEvent(StudioEvent.CancelConsoleCommand) }) { Text("Cancel") }

@@ -157,7 +157,8 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 @Composable private fun TestEditor(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val plan = state.test.compiledPlan
 	val hasExecutablePlan = plan?.toolOperations?.isNotEmpty() == true || plan?.operations?.isNotEmpty() == true
-	val canRun = state.connection.supports("tests.run") && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && hasExecutablePlan
+	val backendSupportsPlan = if (plan?.toolOperations?.isNotEmpty() == true) state.connection.supports("tests.start") else state.connection.supports("tests.run")
+	val canRun = backendSupportsPlan && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && hasExecutablePlan
 	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 			Button({ onEvent(StudioEvent.NewTest) }) { Text("New") }
@@ -169,6 +170,7 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		else if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports("tests.start")) Text("Typed mobile plans require a newer Amoo with tests.start support.", color = MaterialTheme.colorScheme.error)
 		else if (state.selectedDeviceId == null) Text("Choose a device before running this test.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		if (state.testExecution is TestExecution.Running) {
 			val execution = state.testExecution

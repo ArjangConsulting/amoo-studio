@@ -21,6 +21,7 @@ data class StudioState(
 	val reportsLoading: Boolean = false,
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
+	val providerChecks: Map<String, ProviderCheckState> = emptyMap(),
 	val chat: ChatState = ChatState(),
 	val console: ConsoleState = ConsoleState(),
 	val notice: String? = null,
@@ -127,6 +128,7 @@ data class ProviderProfile(
 )
 
 @Serializable enum class ProviderKind(val label: String) { OpenAI("OpenAI"), Anthropic("Claude / Anthropic"), Ollama("Ollama"), Custom("OpenAI-compatible") }
+sealed interface ProviderCheckState { data object Checking : ProviderCheckState; data class Ready(val message: String) : ProviderCheckState; data class Failed(val message: String) : ProviderCheckState }
 
 @Immutable
 data class ChatState(
@@ -134,6 +136,7 @@ data class ChatState(
 	val messages: List<ChatMessage> = emptyList(),
 	val operation: ChatOperation = ChatOperation.Idle,
 	val proposedPlan: CompiledToolPlan? = null,
+	val lastError: String? = null,
 )
 
 @Serializable data class ChatMessage(val id: String, val role: ChatRole, val content: String)
@@ -207,6 +210,9 @@ sealed interface StudioEvent {
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
+	data class CheckProvider(val id: String) : StudioEvent
+	data class ProviderCheckFinished(val id: String, val message: String) : StudioEvent
+	data class ProviderCheckFailed(val id: String, val message: String) : StudioEvent
 	data class ChangeChatInput(val value: String) : StudioEvent
 	data object SendChat : StudioEvent
 	data class ChatRequestStarted(val message: ChatMessage) : StudioEvent
@@ -216,6 +222,7 @@ sealed interface StudioEvent {
 	data class ChatRequestFailed(val message: String) : StudioEvent
 	data object CancelChat : StudioEvent
 	data object ClearChat : StudioEvent
+	data object RetryLastChat : StudioEvent
 	data class ChangeConsoleInput(val value: String) : StudioEvent
 	data class ChooseConsoleSuggestion(val command: String) : StudioEvent
 	data class MoveConsoleSuggestion(val delta: Int) : StudioEvent
@@ -309,15 +316,19 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SaveProvider -> copy(providers = providers.filterNot { it.id == event.profile.id } + event.profile, selectedProviderId = event.profile.id, notice = "Provider saved")
 	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id })
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)
+	is StudioEvent.CheckProvider -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Checking))
+	is StudioEvent.ProviderCheckFinished -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Ready(event.message)))
+	is StudioEvent.ProviderCheckFailed -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Failed(event.message)))
 	is StudioEvent.ChangeChatInput -> copy(chat = chat.copy(input = event.value))
 	StudioEvent.SendChat -> this
-	is StudioEvent.ChatRequestStarted -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message, operation = ChatOperation.Sending), notice = null)
+	is StudioEvent.ChatRequestStarted -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message, operation = ChatOperation.Sending, lastError = null), notice = null)
 	is StudioEvent.ChatResponseReceived -> copy(chat = chat.copy(messages = chat.messages + event.message, operation = ChatOperation.Idle, proposedPlan = event.proposedPlan))
 	StudioEvent.ApplyProposedPlan -> chat.proposedPlan?.let { proposal -> copy(test = test.copy(compiledPlan = proposal), isTestDirty = true, chat = chat.copy(proposedPlan = null), notice = "Applied AI plan to ${test.name}") } ?: this
 	StudioEvent.RejectProposedPlan -> copy(chat = chat.copy(proposedPlan = null), notice = "AI plan discarded")
-	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = event.message)
+	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle, lastError = event.message), notice = event.message)
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())
+	StudioEvent.RetryLastChat -> copy(chat = chat.copy(input = chat.messages.lastOrNull { it.role == ChatRole.User }?.content.orEmpty(), lastError = null))
 	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value, suggestionIndex = 0, historyIndex = null))
 	is StudioEvent.ChooseConsoleSuggestion -> copy(console = console.copy(input = event.command, suggestionIndex = 0, historyIndex = null))
 	is StudioEvent.MoveConsoleSuggestion -> copy(console = console.copy(suggestionIndex = (console.suggestionIndex + event.delta).coerceAtLeast(0)))

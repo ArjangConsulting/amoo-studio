@@ -54,6 +54,7 @@ private data class Handshake(
 @Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
 @Serializable private data class ChatRequest(val provider: ProviderProfile, val messages: List<ChatMessage>, val activeTest: AmooTest)
 @Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
+@Serializable private data class ProviderCheckResult(val message: String)
 @Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
 @Serializable private data class ReplResult(val output: String)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
@@ -70,7 +71,7 @@ private class StudioController(
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 	private val testFileStore = AmooTestFileStore(json)
-	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders()))
+	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders(), chat = ChatState(messages = loadChatMessages())))
 	private val client = ProcessRpcClient(command = {
 		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
 	})
@@ -108,7 +109,9 @@ private class StudioController(
 		when (event) {
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
 			StudioEvent.SendChat -> sendChat()
+			StudioEvent.RetryLastChat -> sendChat()
 			StudioEvent.CancelChat -> { chatJob?.cancel(); chatJob = null }
+			StudioEvent.ClearChat -> persistChatMessages()
 			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
 			StudioEvent.RunTest -> runTest()
@@ -120,6 +123,7 @@ private class StudioController(
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
 			StudioEvent.RefreshMcpStatus -> refreshMcpStatus()
 			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
+			is StudioEvent.CheckProvider -> checkProvider(event.id)
 			StudioEvent.RefreshDevices -> refreshDevices()
 			is StudioEvent.SelectSection -> when (event.section) {
 				StudioSection.Devices -> if (state.value.devices.isEmpty()) refreshDevices()
@@ -291,14 +295,25 @@ private class StudioController(
 		if (input.isEmpty() || chatJob?.isActive == true) return
 		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
 		state.value = state.value.reduce(StudioEvent.ChatRequestStarted(userMessage))
+		persistChatMessages()
 		val request = ChatRequest(provider, snapshot.chat.messages + userMessage, snapshot.test)
 		chatJob = scope.launch {
 			runCatching { json.decodeFromJsonElement<ChatResult>(client.call("chat.send", json.encodeToJsonElement(request))) }
-				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message), result.proposedPlan)) }
+				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message), result.proposedPlan)); persistChatMessages() }
 				.onFailure { error ->
 					if (state.value.chat.operation == ChatOperation.Sending) state.value = state.value.reduce(StudioEvent.ChatRequestFailed("AI request failed: ${error.message}"))
 				}
 			chatJob = null
+		}
+	}
+
+	private fun checkProvider(id: String) {
+		if (!requireCapability("providers.check")) return
+		val provider = state.value.providers.firstOrNull { it.id == id } ?: return
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<ProviderCheckResult>(client.call("providers.check", json.encodeToJsonElement(provider))) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ProviderCheckFinished(id, it.message)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ProviderCheckFailed(id, "Connection failed: ${it.message}")) }
 		}
 	}
 
@@ -380,6 +395,15 @@ private class StudioController(
 	private fun loadProviders(): List<ProviderProfile> = runCatching {
 		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
 	}.getOrNull() ?: defaultProviders()
+
+	private fun loadChatMessages(): List<ChatMessage> = runCatching {
+		preferences.get("chatMessages", null)?.let { json.decodeFromString<List<ChatMessage>>(it) }
+	}.getOrNull().orEmpty()
+
+	private fun persistChatMessages() {
+		runCatching { preferences.put("chatMessages", json.encodeToString(state.value.chat.messages.takeLast(100))) }
+			.onFailure { state.value = state.value.copy(notice = "Could not save conversation: ${it.message}") }
+	}
 
 	private fun loadThemeMode(): ThemeMode = preferences.get("themeMode", null)
 		?.let { stored -> ThemeMode.entries.firstOrNull { it.name == stored } }

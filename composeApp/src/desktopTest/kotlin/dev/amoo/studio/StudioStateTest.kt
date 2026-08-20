@@ -153,6 +153,26 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `failed chat can restore the last prompt for retry`() {
+		val state = StudioState(chat = ChatState(messages = listOf(ChatMessage("user-1", ChatRole.User, "Generate a sign-in plan"))))
+			.reduce(StudioEvent.ChatRequestFailed("Provider timed out"))
+
+		val retry = state.reduce(StudioEvent.RetryLastChat)
+
+		assertEquals("Generate a sign-in plan", retry.chat.input)
+		assertEquals(null, retry.chat.lastError)
+	}
+
+	@Test
+	fun `provider check renders per-profile result`() {
+		val checking = StudioState().reduce(StudioEvent.CheckProvider("ollama"))
+		assertEquals(ProviderCheckState.Checking, checking.providerChecks["ollama"])
+
+		val ready = checking.reduce(StudioEvent.ProviderCheckFinished("ollama", "Connected"))
+		assertEquals(ProviderCheckState.Ready("Connected"), ready.providerChecks["ollama"])
+	}
+
+	@Test
 	fun `console suggestions include selected runtime context`() {
 		val state = StudioState(
 			console = ConsoleState(input = "pixel"),

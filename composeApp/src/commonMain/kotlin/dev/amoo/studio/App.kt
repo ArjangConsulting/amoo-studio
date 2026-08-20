@@ -279,6 +279,14 @@ private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent
 			TextButton({ onEvent(StudioEvent.SelectSection(StudioSection.Settings)) }) { Text("Provider settings") }
 		}
 		if (!canChat) Text("The connected Amoo version does not advertise AI chat. Update Amoo to enable chat.send.", color = MaterialTheme.colorScheme.error)
+		state.chat.lastError?.let { error ->
+			Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+				Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+					Text(error, Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
+					TextButton({ onEvent(StudioEvent.RetryLastChat) }) { Text("Retry") }
+				}
+			}
+		}
 		LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 			if (state.chat.messages.isEmpty()) item {
 				Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -502,7 +510,16 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 		state.providers.forEach { profile -> key(profile.id) {
 			Card(Modifier.fillMaxWidth().clickable { onEvent(StudioEvent.SelectProvider(profile.id)) }, colors = CardDefaults.cardColors(containerColor = if (profile.id == state.selectedProviderId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow)) {
 				Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-					Column(Modifier.weight(1f)) { Text(profile.name, style = MaterialTheme.typography.titleMedium); Text("${profile.kind.label} · ${profile.model}") }
+					Column(Modifier.weight(1f)) {
+						Text(profile.name, style = MaterialTheme.typography.titleMedium); Text("${profile.kind.label} · ${profile.model}")
+						when (val check = state.providerChecks[profile.id]) {
+							ProviderCheckState.Checking -> Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+							is ProviderCheckState.Ready -> Text(check.message, color = MaterialTheme.colorScheme.primary)
+							is ProviderCheckState.Failed -> Text(check.message, color = MaterialTheme.colorScheme.error)
+							null -> Unit
+						}
+					}
+					OutlinedButton({ onEvent(StudioEvent.CheckProvider(profile.id)) }, enabled = state.connection.supports("providers.check") && state.providerChecks[profile.id] !is ProviderCheckState.Checking) { Text("Test") }
 					TextButton({ onEvent(StudioEvent.RemoveProvider(profile.id)) }) { Text("Remove") }
 				}
 			}

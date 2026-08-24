@@ -63,6 +63,8 @@ private data class Handshake(
 @Serializable private data class TestRunStatus(val runId: String, val state: TestRunState, val currentOperation: Int, val totalOperations: Int, val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private enum class TestRunState { Running, Passed, Failed, Cancelled }
 @Serializable private data class ReportListResult(val reports: List<TestReport>)
+@Serializable private data class TestExportRequest(val test: AmooTest)
+@Serializable private data class TestExportResult(val fileName: String, val source: String)
 @Serializable private data class McpStatusResult(val available: Boolean, val transport: String, val arguments: List<String>)
 
 private class StudioController(
@@ -116,6 +118,7 @@ private class StudioController(
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
 			StudioEvent.RunTest -> runTest()
 			StudioEvent.CancelTestRun -> cancelTestRun(activeRunId)
+			StudioEvent.ExportTest -> exportTest()
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
 			StudioEvent.OpenTest -> openTest()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
@@ -390,6 +393,33 @@ private class StudioController(
 		}
 		testRunJob?.cancel()
 		testRunJob = null
+	}
+
+	private fun exportTest() {
+		if (!requireCapability("tests.export")) return
+		val snapshot = state.value
+		if (snapshot.testExportInProgress) return
+		if (snapshot.test.compiledPlan?.toolOperations.isNullOrEmpty()) {
+			state.value = state.value.copy(notice = "Add at least one action before exporting a test")
+			return
+		}
+		state.value = state.value.reduce(StudioEvent.TestExportStarted)
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<TestExportResult>(client.call("tests.export", json.encodeToJsonElement(TestExportRequest(snapshot.test)))) }
+				.onSuccess { result -> saveExportedTest(result) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.TestExportFailed("Test export failed: ${it.message}")) }
+		}
+	}
+
+	private fun saveExportedTest(result: TestExportResult) {
+		val file = chooseFile(FileDialog.SAVE, "Save generated test", result.fileName)
+		if (file == null) {
+			state.value = state.value.reduce(StudioEvent.TestExportFinished("Export cancelled"))
+			return
+		}
+		runCatching { file.writeText(result.source) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.TestExportFinished("Exported ${file.name}")) }
+			.onFailure { state.value = state.value.reduce(StudioEvent.TestExportFailed("Could not write file: ${it.message}")) }
 	}
 
 	private fun loadProviders(): List<ProviderProfile> = runCatching {

@@ -249,6 +249,28 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `exporting a test tracks in-flight state and clears it on success`() {
+		val started = StudioState().reduce(StudioEvent.TestExportStarted)
+
+		assertEquals(true, started.testExportInProgress)
+
+		val finished = started.reduce(StudioEvent.TestExportFinished("Exported SignInFlowTest.swift"))
+
+		assertEquals(false, finished.testExportInProgress)
+		assertEquals("Exported SignInFlowTest.swift", finished.notice)
+	}
+
+	@Test
+	fun `failed test export clears in-flight state and surfaces the error`() {
+		val started = StudioState().reduce(StudioEvent.TestExportStarted)
+
+		val failed = started.reduce(StudioEvent.TestExportFailed("Test export failed: connection lost"))
+
+		assertEquals(false, failed.testExportInProgress)
+		assertEquals("Test export failed: connection lost", failed.notice)
+	}
+
+	@Test
 	fun `console commands can build and edit a compiled test plan`() {
 		val state = StudioState(test = AmooTest(name = "Smoke"))
 		val withPlan = state

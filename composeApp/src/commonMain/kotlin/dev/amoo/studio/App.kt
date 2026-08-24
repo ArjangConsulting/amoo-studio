@@ -167,11 +167,14 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 			OutlinedButton({ onEvent(StudioEvent.SaveTestAs) }) { Text("Save as…") }
 			if (state.testExecution is TestExecution.Running) OutlinedButton({ onEvent(StudioEvent.CancelTestRun) }) { Text("Cancel run") }
 			else Button({ onEvent(StudioEvent.RunTest) }, enabled = canRun) { Text("Run test") }
+			val canExport = plan?.toolOperations?.isNotEmpty() == true && state.connection.supports("tests.export") && !state.testExportInProgress
+			OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		else if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports("tests.start")) Text("Typed mobile plans require a newer Amoo with tests.start support.", color = MaterialTheme.colorScheme.error)
 		else if (state.selectedDeviceId == null) Text("Choose a device before running this test.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports("tests.export")) Text("Exporting native test code requires the tests.export capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		if (state.testExecution is TestExecution.Running) {
 			val execution = state.testExecution
 			if (execution.totalOperations > 0) LinearProgressIndicator({ execution.currentOperation.toFloat() / execution.totalOperations }, Modifier.fillMaxWidth())

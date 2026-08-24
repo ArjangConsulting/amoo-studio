@@ -35,6 +35,7 @@ data class StudioState(
 	val pendingApproval: PendingApproval? = null,
 	val createDevice: CreateDeviceState? = null,
 	val mcpStatus: McpStatus = McpStatus.Unknown,
+	val testExportInProgress: Boolean = false,
 )
 
 sealed interface McpStatus {
@@ -198,6 +199,10 @@ sealed interface StudioEvent {
 	data class RemoveToolOperation(val id: String) : StudioEvent
 	data object RunTest : StudioEvent
 	data object CancelTestRun : StudioEvent
+	data object ExportTest : StudioEvent
+	data object TestExportStarted : StudioEvent
+	data class TestExportFinished(val message: String) : StudioEvent
+	data class TestExportFailed(val message: String) : StudioEvent
 	data class TestRunStarted(val message: String) : StudioEvent
 	data class TestRunProgress(val runId: String, val message: String, val currentOperation: Int, val totalOperations: Int) : StudioEvent
 	data class TestRunFinished(val message: String, val sessionId: String?, val reportId: String?) : StudioEvent
@@ -305,6 +310,10 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	)
 	StudioEvent.RunTest -> this
 	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
+	StudioEvent.ExportTest -> this
+	StudioEvent.TestExportStarted -> copy(testExportInProgress = true, notice = null)
+	is StudioEvent.TestExportFinished -> copy(testExportInProgress = false, notice = event.message)
+	is StudioEvent.TestExportFailed -> copy(testExportInProgress = false, notice = event.message)
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
 	is StudioEvent.TestRunProgress -> copy(testExecution = TestExecution.Running(event.message, event.runId, event.currentOperation, event.totalOperations))
 	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = event.message, lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)

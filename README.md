@@ -32,6 +32,14 @@ cd ../amoo-studio
 AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
 ```
 
+Alternatively, install a released `amoo` build via Homebrew and let Studio find it on `PATH`:
+
+```bash
+brew tap arjangconsulting/tap
+brew install amoo
+./gradlew :composeApp:run
+```
+
 The desktop app starts `amoo studio serve` and communicates through JSON-RPC 2.0 over
 Content-Length-framed stdio. The transport comes from the versioned
 [`process-rpc-kotlin`](https://github.com/maniramezan/process-rpc-kotlin) library.

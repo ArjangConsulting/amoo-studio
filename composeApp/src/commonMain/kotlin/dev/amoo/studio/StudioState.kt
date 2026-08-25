@@ -36,7 +36,14 @@ data class StudioState(
 	val createDevice: CreateDeviceState? = null,
 	val mcpStatus: McpStatus = McpStatus.Unknown,
 	val testExportInProgress: Boolean = false,
+	val amooInstall: AmooInstallState = AmooInstallState.Idle,
 )
+
+sealed interface AmooInstallState {
+	data object Idle : AmooInstallState
+	data object Running : AmooInstallState
+	data class Failed(val message: String) : AmooInstallState
+}
 
 sealed interface McpStatus {
 	data object Unknown : McpStatus
@@ -170,8 +177,11 @@ data class StudioDevice(
 @Serializable enum class DeviceStatus { Running, Available }
 data class CreateDeviceState(val platform: TestPlatform, val name: String = "", val runtime: String = "", val deviceType: String = "")
 sealed interface DeviceOperation { data object Idle : DeviceOperation; data class Working(val message: String) : DeviceOperation }
-data class PendingApproval(val title: String, val message: String, val action: ApprovedAction)
-sealed interface ApprovedAction { data object ResetAppData : ApprovedAction }
+data class PendingApproval(val title: String, val message: String, val action: ApprovedAction, val confirmLabel: String = "Confirm")
+sealed interface ApprovedAction { data object ResetAppData : ApprovedAction; data object InstallAmoo : ApprovedAction }
+
+const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap arjangconsulting/tap"
+const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install amoo"
 
 fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.8:27b-mlx"))
 
@@ -179,6 +189,11 @@ sealed interface StudioEvent {
 	data class SelectSection(val section: StudioSection) : StudioEvent
 	data class ChangeThemeMode(val value: ThemeMode) : StudioEvent
 	data object RetryConnection : StudioEvent
+	data object RequestInstallAmoo : StudioEvent
+	data object InstallAmooStarted : StudioEvent
+	data class InstallAmooFinished(val message: String) : StudioEvent
+	data class InstallAmooFailed(val message: String) : StudioEvent
+	data object CopyInstallCommands : StudioEvent
 	data object NewTest : StudioEvent
 	data object OpenTest : StudioEvent
 	data object SaveTest : StudioEvent
@@ -269,6 +284,16 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
 	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
+	StudioEvent.RequestInstallAmoo -> copy(pendingApproval = PendingApproval(
+		"Install Amoo via Homebrew?",
+		"Studio will run:\n$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND",
+		ApprovedAction.InstallAmoo,
+		confirmLabel = "Install",
+	))
+	StudioEvent.InstallAmooStarted -> copy(amooInstall = AmooInstallState.Running, notice = null)
+	is StudioEvent.InstallAmooFinished -> copy(amooInstall = AmooInstallState.Idle, notice = event.message)
+	is StudioEvent.InstallAmooFailed -> copy(amooInstall = AmooInstallState.Failed(event.message), notice = event.message)
+	StudioEvent.CopyInstallCommands -> this
 	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
 	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
 	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = "Opened ${event.path}")
@@ -372,7 +397,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChangeProjectPath -> copy(projectPath = event.value)
 	is StudioEvent.ChangeAppId -> copy(appId = event.value)
 	is StudioEvent.ChangeSchemeOrModule -> copy(schemeOrModule = event.value)
-	StudioEvent.RequestResetAppData -> copy(pendingApproval = PendingApproval("Erase app data?", "This removes all local data for $appId on the selected device. The action cannot be undone.", ApprovedAction.ResetAppData))
+	StudioEvent.RequestResetAppData -> copy(pendingApproval = PendingApproval("Erase app data?", "This removes all local data for $appId on the selected device. The action cannot be undone.", ApprovedAction.ResetAppData, confirmLabel = "Erase data"))
 	is StudioEvent.ResolveApproval -> copy(pendingApproval = null)
 	is StudioEvent.DeviceOperationStarted -> copy(deviceOperation = DeviceOperation.Working(event.message), notice = null)
 	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message, lastBuildArtifact = event.artifact ?: lastBuildArtifact)

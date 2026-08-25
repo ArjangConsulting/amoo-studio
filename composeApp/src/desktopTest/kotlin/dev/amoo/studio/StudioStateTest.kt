@@ -26,6 +26,48 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `requesting amoo install surfaces an approval with an install confirm label`() {
+		val state = StudioState(connection = ConnectionState.Unavailable("not found"))
+
+		val updated = state.reduce(StudioEvent.RequestInstallAmoo)
+
+		val approval = updated.pendingApproval
+		assertIs<PendingApproval>(approval)
+		assertEquals(ApprovedAction.InstallAmoo, approval.action)
+		assertEquals("Install", approval.confirmLabel)
+		assertTrue(approval.message.contains(AMOO_HOMEBREW_TAP_COMMAND))
+		assertTrue(approval.message.contains(AMOO_HOMEBREW_INSTALL_COMMAND))
+	}
+
+	@Test
+	fun `starting the amoo install marks state running`() {
+		val state = StudioState(amooInstall = AmooInstallState.Failed("previous failure"))
+
+		val updated = state.reduce(StudioEvent.InstallAmooStarted)
+
+		assertEquals(AmooInstallState.Running, updated.amooInstall)
+	}
+
+	@Test
+	fun `a finished amoo install clears any prior failure`() {
+		val state = StudioState(amooInstall = AmooInstallState.Running)
+
+		val updated = state.reduce(StudioEvent.InstallAmooFinished("Amoo installed"))
+
+		assertEquals(AmooInstallState.Idle, updated.amooInstall)
+		assertEquals("Amoo installed", updated.notice)
+	}
+
+	@Test
+	fun `a failed amoo install records the failure message`() {
+		val state = StudioState(amooInstall = AmooInstallState.Running)
+
+		val updated = state.reduce(StudioEvent.InstallAmooFailed("Homebrew install failed: brew not found"))
+
+		assertEquals(AmooInstallState.Failed("Homebrew install failed: brew not found"), updated.amooInstall)
+	}
+
+	@Test
 	fun `changing appearance preserves the rest of studio state`() {
 		val state = StudioState(section = StudioSection.Settings, testPath = "/tmp/login.amootest")
 

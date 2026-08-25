@@ -47,7 +47,7 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 			state.pendingApproval?.let { approval -> AlertDialog(
 				onDismissRequest = { onEvent(StudioEvent.ResolveApproval(false)) },
 				title = { Text(approval.title) }, text = { Text(approval.message) },
-				confirmButton = { Button({ onEvent(StudioEvent.ResolveApproval(true)) }) { Text("Erase data") } },
+				confirmButton = { Button({ onEvent(StudioEvent.ResolveApproval(true)) }) { Text(approval.confirmLabel) } },
 				dismissButton = { TextButton({ onEvent(StudioEvent.ResolveApproval(false)) }) { Text("Cancel") } },
 			) }
 			state.createDevice?.let { form -> CreateDeviceDialog(state, form, onEvent) }
@@ -141,7 +141,7 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 
 @Composable private fun OverviewContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-		ConnectionCard(state.connection, onEvent)
+		ConnectionCard(state.connection, state.amooInstall, state.hostPlatform, onEvent)
 		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
 			Text("${state.hostPlatform.label} workspace", style = MaterialTheme.typography.titleMedium)
 			Text(if (state.hostPlatform == HostPlatform.MacOS) "iOS and Android workflows are available when advertised by Amoo." else "Android workflows are available. iOS and Xcode require macOS.")
@@ -547,12 +547,31 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 	} }
 }
 
-@Composable private fun ConnectionCard(connection: ConnectionState, onEvent: (StudioEvent) -> Unit) {
+@Composable private fun ConnectionCard(connection: ConnectionState, amooInstall: AmooInstallState, hostPlatform: HostPlatform, onEvent: (StudioEvent) -> Unit) {
 	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) { Row(Modifier.fillMaxWidth().padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
 		when (connection) {
 			ConnectionState.Starting -> { CircularProgressIndicator(); Column { Text("Starting Amoo", style = MaterialTheme.typography.titleMedium); Text("Connecting to the bundled automation engine…") } }
 			is ConnectionState.Ready -> Column { Text("Amoo ${connection.version} is ready", style = MaterialTheme.typography.titleMedium); Text("Protocol ${connection.protocolVersion} · ${connection.capabilities.joinToString()}") }
-			is ConnectionState.Unavailable -> { Column(Modifier.weight(1f)) { Text("Amoo is unavailable", color = MaterialTheme.colorScheme.error); Text(connection.reason) }; Button({ onEvent(StudioEvent.RetryConnection) }) { Text("Retry") } }
+			is ConnectionState.Unavailable -> {
+				Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+					Text("Amoo is unavailable", color = MaterialTheme.colorScheme.error)
+					Text(connection.reason)
+					if (amooInstall is AmooInstallState.Running) {
+						Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+							CircularProgressIndicator(Modifier.size(16.dp))
+							Text("Installing Amoo via Homebrew…")
+						}
+					}
+					if (amooInstall is AmooInstallState.Failed) Text(amooInstall.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+					if (hostPlatform != HostPlatform.Unsupported) {
+						Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+							OutlinedButton({ onEvent(StudioEvent.RequestInstallAmoo) }, enabled = amooInstall !is AmooInstallState.Running) { Text("Install via Homebrew") }
+							TextButton({ onEvent(StudioEvent.CopyInstallCommands) }) { Text("Copy install commands") }
+						}
+					}
+				}
+				Button({ onEvent(StudioEvent.RetryConnection) }) { Text("Retry") }
+			}
 		}
 	} }
 }

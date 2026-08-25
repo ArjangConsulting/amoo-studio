@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -124,6 +125,7 @@ private class StudioController(
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
 			StudioEvent.SaveTestAs -> saveTest(forcePicker = true)
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
+			StudioEvent.CopyInstallCommands -> copyInstallCommands()
 			StudioEvent.RefreshMcpStatus -> refreshMcpStatus()
 			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
 			is StudioEvent.CheckProvider -> checkProvider(event.id)
@@ -141,7 +143,11 @@ private class StudioController(
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
 			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
 			StudioEvent.ReinstallAndRun -> reinstallAndRun()
-			is StudioEvent.ResolveApproval -> if (event.approved && approvedAction == ApprovedAction.ResetAppData) resetAppData()
+			is StudioEvent.ResolveApproval -> if (event.approved) when (approvedAction) {
+				ApprovedAction.ResetAppData -> resetAppData()
+				ApprovedAction.InstallAmoo -> installAmoo()
+				null -> Unit
+			}
 			else -> Unit
 		}
 	}
@@ -271,6 +277,39 @@ private class StudioController(
 		""".trimIndent()
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(configuration), null)
 		state.value = state.value.copy(notice = "MCP configuration copied")
+	}
+
+	private fun copyInstallCommands() {
+		val commands = "$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND"
+		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(commands), null)
+		state.value = state.value.copy(notice = "Install commands copied")
+	}
+
+	private fun installAmoo() {
+		if (state.value.amooInstall == AmooInstallState.Running) return
+		state.value = state.value.reduce(StudioEvent.InstallAmooStarted)
+		scope.launch(Dispatchers.IO) {
+			val result = runCatching {
+				runShellCommand(AMOO_HOMEBREW_TAP_COMMAND.split(" "))
+				runShellCommand(AMOO_HOMEBREW_INSTALL_COMMAND.split(" "))
+			}
+			withContext(Dispatchers.Main) {
+				result.onSuccess {
+					state.value = state.value.reduce(StudioEvent.InstallAmooFinished("Amoo installed via Homebrew. Reconnecting…"))
+					client.close()
+					client.start()
+				}.onFailure { error ->
+					state.value = state.value.reduce(StudioEvent.InstallAmooFailed("Homebrew install failed: ${error.message}"))
+				}
+			}
+		}
+	}
+
+	private fun runShellCommand(command: List<String>) {
+		val process = ProcessBuilder(command).redirectErrorStream(true).start()
+		val output = process.inputStream.bufferedReader().readText()
+		val exitCode = process.waitFor()
+		if (exitCode != 0) throw IllegalStateException("${command.joinToString(" ")} failed (exit $exitCode): ${output.trim().takeLast(500)}")
 	}
 
 	private fun refreshMcpStatus() = scope.launch {

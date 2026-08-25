@@ -563,7 +563,7 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 						}
 					}
 					if (amooInstall is AmooInstallState.Failed) Text(amooInstall.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-					if (hostPlatform != HostPlatform.Unsupported) {
+					if (connection.canInstallAmoo && hostPlatform != HostPlatform.Unsupported) {
 						Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 							OutlinedButton({ onEvent(StudioEvent.RequestInstallAmoo) }, enabled = amooInstall !is AmooInstallState.Running) { Text("Install via Homebrew") }
 							TextButton({ onEvent(StudioEvent.CopyInstallCommands) }) { Text("Copy install commands") }

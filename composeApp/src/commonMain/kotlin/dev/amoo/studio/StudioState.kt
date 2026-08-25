@@ -409,7 +409,7 @@ private fun nextOperationId(operations: List<ToolOperation>): Int = (operations.
 sealed interface ConnectionState {
 	data object Starting : ConnectionState
 	data class Ready(val version: String, val protocolVersion: Int, val capabilities: List<String>) : ConnectionState
-	data class Unavailable(val reason: String) : ConnectionState
+	data class Unavailable(val reason: String, val canInstallAmoo: Boolean = false) : ConnectionState
 }
 
 const val STUDIO_PROTOCOL_VERSION: Int = 1

@@ -25,6 +25,7 @@ Current methods:
 | `tests.start` | Start a cancellable test run and return its run ID immediately |
 | `tests.status` | Poll per-operation progress and terminal session/report references |
 | `tests.cancel` | Cancel a running backend task by run ID |
+| `tests.export` | Generate native test source from an authored typed test |
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
 | `mcp.status` | Report MCP readiness, transport, and launch arguments |
 
@@ -46,6 +47,10 @@ workflow with an explicit approval event.
 It returns a user-facing summary plus optional `sessionId` and `reportId`. Cancelling in Studio stops
 waiting for legacy backends. When `tests.start`, `tests.status`, and `tests.cancel` are advertised,
 Studio uses the asynchronous workflow, renders per-operation progress, and cancels the backend task.
+
+`tests.export` is enabled only when the handshake advertises that capability. It accepts
+`{ "test": <authored test> }` and returns `{ "fileName": "...", "source": "..." }`. Amoo owns
+native code generation; Studio only asks the user where to save the returned source.
 
 `reports.list` returns `{ "reports": [...] }`; each report contains its stable ID, test name, status,
 start time, optional duration, device name, summary, and artifact paths. Studio renders these paths but

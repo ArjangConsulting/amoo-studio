@@ -25,6 +25,10 @@ brew tap arjangconsulting/tap
 brew install amoo
 ```
 
+Homebrew installation is supported on macOS and Linux. Studio checks `PATH` plus `/opt/homebrew/bin`,
+`/usr/local/bin`, and `/home/linuxbrew/.linuxbrew/bin`, which covers desktop launches that do not
+inherit an interactive shell's `PATH`.
+
 Studio runs on macOS and Linux. macOS can expose both iOS/Xcode and Android/Gradle workflows;
 Linux exposes Android/Gradle workflows. The backend handshake remains the authority for individual
 operations on either host.

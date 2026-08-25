@@ -76,7 +76,7 @@ private class StudioController(
 	private val testFileStore = AmooTestFileStore(json)
 	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders(), chat = ChatState(messages = loadChatMessages())))
 	private val client = ProcessRpcClient(command = {
-		listOf(BundledBinaryLocator("amoo", "AMOO_BINARY").locate(), "studio", "serve")
+		listOf(locateAmoo(), "studio", "serve")
 	})
 	private var chatJob: Job? = null
 	private var consoleJob: Job? = null
@@ -88,7 +88,9 @@ private class StudioController(
 			client.state.collect { processState ->
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
-					is ProcessRpcState.Unavailable -> state.value = state.value.copy(connection = ConnectionState.Unavailable(processState.reason))
+					is ProcessRpcState.Unavailable -> state.value = state.value.copy(
+						connection = ConnectionState.Unavailable(processState.reason, canInstallAmoo = isAmooMissing()),
+					)
 					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.copy(connection = ConnectionState.Starting)
 				}
 			}
@@ -261,7 +263,7 @@ private class StudioController(
 	}
 
 	private fun copyMcpConfiguration() {
-		val executable = runCatching { BundledBinaryLocator("amoo", "AMOO_BINARY").locate() }.getOrElse {
+		val executable = runCatching { locateAmoo() }.getOrElse {
 			state.value = state.value.copy(notice = "Could not locate Amoo: ${it.message}")
 			return
 		}
@@ -290,8 +292,9 @@ private class StudioController(
 		state.value = state.value.reduce(StudioEvent.InstallAmooStarted)
 		scope.launch(Dispatchers.IO) {
 			val result = runCatching {
-				runShellCommand(AMOO_HOMEBREW_TAP_COMMAND.split(" "))
-				runShellCommand(AMOO_HOMEBREW_INSTALL_COMMAND.split(" "))
+				val brew = locateHomebrew()
+				runShellCommand(listOf(brew, "tap", "arjangconsulting/tap"))
+				runShellCommand(listOf(brew, "install", "amoo"))
 			}
 			withContext(Dispatchers.Main) {
 				result.onSuccess {
@@ -509,6 +512,31 @@ private fun detectHostPlatform(): HostPlatform {
 		"linux" in osName -> HostPlatform.Linux
 		else -> HostPlatform.Unsupported
 	}
+}
+
+private fun locateAmoo(): String = locateExecutable(name = "amoo", environmentVariable = "AMOO_BINARY")
+
+private fun locateHomebrew(): String = locateExecutable(name = "brew")
+
+private fun isAmooMissing(): Boolean = System.getenv("AMOO_BINARY").isNullOrBlank() && runCatching { locateAmoo() }.isFailure
+
+private fun locateExecutable(name: String, environmentVariable: String? = null): String {
+	if (environmentVariable != null) {
+		if (!System.getenv(environmentVariable).isNullOrBlank()) return BundledBinaryLocator(name, environmentVariable).locate()
+		runCatching { BundledBinaryLocator(name, environmentVariable).locate() }.getOrNull()?.let { return it }
+	}
+	System.getenv("PATH").orEmpty().split(File.pathSeparatorChar)
+		.asSequence()
+		.filter(String::isNotBlank)
+		.map { File(it, name) }
+		.firstOrNull { it.isFile && it.canExecute() }
+		?.let { return it.absolutePath }
+	listOf("/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin")
+		.asSequence()
+		.map { File(it, name) }
+		.firstOrNull { it.isFile && it.canExecute() }
+		?.let { return it.absolutePath }
+	throw IllegalStateException("Could not locate $name. Set ${environmentVariable ?: "PATH"} or install Homebrew.")
 }
 
 private fun installDockIcon() {

@@ -27,7 +27,7 @@ class StudioStateTest {
 
 	@Test
 	fun `requesting amoo install surfaces an approval with an install confirm label`() {
-		val state = StudioState(connection = ConnectionState.Unavailable("not found"))
+		val state = StudioState(connection = ConnectionState.Unavailable("not found", canInstallAmoo = true))
 
 		val updated = state.reduce(StudioEvent.RequestInstallAmoo)
 
@@ -136,6 +136,7 @@ class StudioStateTest {
 
 		assertIs<ConnectionState.Unavailable>(connection)
 		assertTrue(connection.reason.contains("Update Amoo Studio and Amoo"))
+		assertEquals(false, connection.canInstallAmoo)
 	}
 
 	@Test

@@ -40,6 +40,9 @@ brew install amoo
 ./gradlew :composeApp:run
 ```
 
+This flow works with Homebrew on macOS and Linux. Packaged desktop launches also check the standard
+Apple Silicon, Intel macOS, and Linuxbrew binary locations when Homebrew is not present on `PATH`.
+
 The desktop app starts `amoo studio serve` and communicates through JSON-RPC 2.0 over
 Content-Length-framed stdio. The transport comes from the versioned
 [`process-rpc-kotlin`](https://github.com/maniramezan/process-rpc-kotlin) library.

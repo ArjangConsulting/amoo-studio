@@ -54,7 +54,7 @@ jobs:
           install -m 755 "$AMOO_ASSET" "composeApp/app-resources/${{ matrix.platform }}-${{ matrix.arch }}/amoo"
       - name: Package Studio
         run: ./gradlew :composeApp:verifyEmbeddedAmoo ${{ matrix.package_tasks }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Amoo-Studio-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ matrix.outputs }}

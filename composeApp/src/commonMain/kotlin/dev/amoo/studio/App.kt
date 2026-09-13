@@ -533,7 +533,7 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 					Column(Modifier.weight(1f)) {
 						Text(profile.name, style = MaterialTheme.typography.titleMedium); Text("${profile.kind.label} · ${profile.model}")
 						when (val check = state.providerChecks[profile.id]) {
-							ProviderCheckState.Checking -> Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+							ProviderCheckState.Checking -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp); Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant) }
 							is ProviderCheckState.Ready -> Text(check.message, color = MaterialTheme.colorScheme.primary)
 							is ProviderCheckState.Failed -> Text(check.message, color = MaterialTheme.colorScheme.error)
 							null -> Unit

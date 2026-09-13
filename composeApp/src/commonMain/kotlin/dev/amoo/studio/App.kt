@@ -12,15 +12,30 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.maniramezan.kmpcomponents.KmpTheme
 import io.github.maniramezan.kmpcomponents.ThemeMode as KmpThemeMode
+
+/** Compose Desktop text fields don't traverse focus on Tab by default; move focus explicitly. */
+private fun Modifier.focusNextOnTab(): Modifier = composed {
+	val focusManager = LocalFocusManager.current
+	onPreviewKeyEvent { event ->
+		if (event.type == KeyEventType.KeyDown && event.key == Key.Tab) {
+			focusManager.moveFocus(if (event.isShiftPressed) FocusDirection.Previous else FocusDirection.Next)
+			true
+		} else false
+	}
+}
 
 @Composable
 fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
@@ -85,10 +100,10 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 		available.forEach { device -> key(device.id) { DeviceCard(device, device.id == state.selectedDeviceId, canStartDevices, onEvent) } }
 		HorizontalDivider()
 		Text("App project", style = MaterialTheme.typography.titleLarge)
-		OutlinedTextField(state.projectPath, { onEvent(StudioEvent.ChangeProjectPath(it)) }, label = { Text(if (state.hostPlatform == HostPlatform.MacOS) "Xcode or Gradle project path" else "Gradle project path") }, trailingIcon = { TextButton({ onEvent(StudioEvent.ChooseProjectPath) }) { Text("Choose…") } }, modifier = Modifier.fillMaxWidth())
+		OutlinedTextField(state.projectPath, { onEvent(StudioEvent.ChangeProjectPath(it)) }, label = { Text(if (state.hostPlatform == HostPlatform.MacOS) "Xcode or Gradle project path" else "Gradle project path") }, trailingIcon = { TextButton({ onEvent(StudioEvent.ChooseProjectPath) }) { Text("Choose…") } }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
 		Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-			OutlinedTextField(state.appId, { onEvent(StudioEvent.ChangeAppId(it)) }, label = { Text("Bundle ID / application ID") }, modifier = Modifier.weight(1f))
-			OutlinedTextField(state.schemeOrModule, { onEvent(StudioEvent.ChangeSchemeOrModule(it)) }, label = { Text(if (selected?.platform == TestPlatform.Android) "Gradle module" else "Xcode scheme") }, modifier = Modifier.weight(1f))
+			OutlinedTextField(state.appId, { onEvent(StudioEvent.ChangeAppId(it)) }, label = { Text("Bundle ID / application ID") }, modifier = Modifier.weight(1f).focusNextOnTab())
+			OutlinedTextField(state.schemeOrModule, { onEvent(StudioEvent.ChangeSchemeOrModule(it)) }, label = { Text(if (selected?.platform == TestPlatform.Android) "Gradle module" else "Xcode scheme") }, modifier = Modifier.weight(1f).focusNextOnTab())
 		}
 		Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
 			Button({ onEvent(StudioEvent.BuildInstallAndRun) }, enabled = canBuild && selected != null && state.hostPlatform.supports(selected.platform) && state.projectPath.isNotBlank() && state.appId.isNotBlank() && state.deviceOperation is DeviceOperation.Idle) { Text("Build, install & run") }
@@ -109,9 +124,9 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 			Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 				TestPlatform.entries.filter(state.hostPlatform::supports).forEach { platform -> FilterChip(form.platform == platform, { onEvent(StudioEvent.ChangeCreateDevicePlatform(platform)) }, { Text(platform.label) }) }
 			}
-			OutlinedTextField(form.name, { onEvent(StudioEvent.ChangeCreateDeviceName(it)) }, label = { Text("Name") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "Amoo iPhone" else "Amoo Pixel") }, singleLine = true)
-			OutlinedTextField(form.runtime, { onEvent(StudioEvent.ChangeCreateDeviceRuntime(it)) }, label = { Text("Runtime / system image") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iOS 26.0" else "android-36") }, singleLine = true)
-			OutlinedTextField(form.deviceType, { onEvent(StudioEvent.ChangeCreateDeviceType(it)) }, label = { Text("Device type") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iPhone 17" else "pixel_9") }, singleLine = true)
+			OutlinedTextField(form.name, { onEvent(StudioEvent.ChangeCreateDeviceName(it)) }, label = { Text("Name") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "Amoo iPhone" else "Amoo Pixel") }, singleLine = true, modifier = Modifier.focusNextOnTab())
+			OutlinedTextField(form.runtime, { onEvent(StudioEvent.ChangeCreateDeviceRuntime(it)) }, label = { Text("Runtime / system image") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iOS 26.0" else "android-36") }, singleLine = true, modifier = Modifier.focusNextOnTab())
+			OutlinedTextField(form.deviceType, { onEvent(StudioEvent.ChangeCreateDeviceType(it)) }, label = { Text("Device type") }, placeholder = { Text(if (form.platform == TestPlatform.Ios) "iPhone 17" else "pixel_9") }, singleLine = true, modifier = Modifier.focusNextOnTab())
 			Text("Amoo validates installed runtimes and returns remediation when an image or device type is unavailable.", style = MaterialTheme.typography.bodySmall)
 		} },
 		confirmButton = { Button({ onEvent(StudioEvent.ConfirmCreateDevice) }, enabled = form.name.isNotBlank() && form.runtime.isNotBlank() && form.deviceType.isNotBlank()) { Text("Create") } },
@@ -182,8 +197,8 @@ private fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
 			Text(execution.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-			OutlinedTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = { Text("Test name") }, modifier = Modifier.fillMaxWidth())
-			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+			OutlinedTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = { Text("Test name") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
+			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth().focusNextOnTab())
 			Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
 				Text("Platform", fontWeight = FontWeight.Medium)
 				TestPlatform.entries.filter(state.hostPlatform::supports).forEach { platform -> FilterChip(state.test.platform == platform, { onEvent(StudioEvent.ChangeTestPlatform(platform)) }, { Text(platform.label) }) }
@@ -247,7 +262,7 @@ private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent
 					label = { Text(argument.label + if (argument.required) " *" else "") },
 					placeholder = argument.placeholder.takeIf(String::isNotBlank)?.let { { Text(it) } },
 					singleLine = true,
-					modifier = Modifier.fillMaxWidth(),
+					modifier = Modifier.fillMaxWidth().focusNextOnTab(),
 				)
 			}
 			val validationError = draft.validationError()
@@ -266,8 +281,8 @@ private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent
 				Text("Step ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
 				if (canRemove) TextButton({ onEvent(StudioEvent.RemoveTestStep(step.id)) }) { Text("Remove") }
 			}
-			OutlinedTextField(step.instruction, { onEvent(StudioEvent.ChangeTestStep(step.id, instruction = it)) }, label = { Text("Action or instruction") }, modifier = Modifier.fillMaxWidth())
-			OutlinedTextField(step.expected, { onEvent(StudioEvent.ChangeTestStep(step.id, expected = it)) }, label = { Text("Expected result") }, modifier = Modifier.fillMaxWidth())
+			OutlinedTextField(step.instruction, { onEvent(StudioEvent.ChangeTestStep(step.id, instruction = it)) }, label = { Text("Action or instruction") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
+			OutlinedTextField(step.expected, { onEvent(StudioEvent.ChangeTestStep(step.id, expected = it)) }, label = { Text("Expected result") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
 		}
 	}
 }
@@ -539,10 +554,10 @@ private fun ProposedPlanCard(plan: CompiledToolPlan, onEvent: (StudioEvent) -> U
 	Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
 		Text("Add provider", style = MaterialTheme.typography.titleLarge)
 		Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { ProviderKind.entries.forEach { item -> FilterChip(kind == item, { kind = item; when (item) { ProviderKind.OpenAI -> { baseUrl = "https://api.openai.com/v1"; env = "OPENAI_API_KEY" }; ProviderKind.Anthropic -> { baseUrl = "https://api.anthropic.com"; env = "ANTHROPIC_API_KEY" }; ProviderKind.Ollama -> { baseUrl = "http://localhost:11434"; env = "" }; ProviderKind.Custom -> Unit } }, { Text(item.label) }) } }
-		OutlinedTextField(name, { name = it }, label = { Text("Display name") }, modifier = Modifier.fillMaxWidth())
-		OutlinedTextField(model, { model = it }, label = { Text("Model") }, modifier = Modifier.fillMaxWidth())
-		OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Base URL") }, modifier = Modifier.fillMaxWidth())
-		OutlinedTextField(env, { env = it }, label = { Text("API key environment variable") }, supportingText = { Text("Studio stores the variable name, never the secret.") }, modifier = Modifier.fillMaxWidth())
+		OutlinedTextField(name, { name = it }, label = { Text("Display name") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
+		OutlinedTextField(model, { model = it }, label = { Text("Model") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
+		OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Base URL") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
+		OutlinedTextField(env, { env = it }, label = { Text("API key environment variable") }, supportingText = { Text("Studio stores the variable name, never the secret.") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
 		Button({ onEvent(StudioEvent.SaveProvider(ProviderProfile("provider-${name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}-${model.hashCode()}", name.trim(), kind, baseUrl.trim(), model.trim(), env.trim()))) }, enabled = name.isNotBlank() && model.isNotBlank() && baseUrl.isNotBlank()) { Text("Save provider") }
 	} }
 }

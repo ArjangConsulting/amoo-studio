@@ -7,3 +7,4 @@ __pycache__/
 local.properties
 .DS_Store
 .build
+.claude/settings.local.json

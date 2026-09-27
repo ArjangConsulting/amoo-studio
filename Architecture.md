@@ -7,7 +7,10 @@ Swift Amoo executable owns device automation, companion management, MCP tools, m
 sessions, reports, and artifacts.
 
 Studio owns the versioned `.amootest` presentation format and provider profile preferences. Profiles
-contain endpoints, model names, and secret environment-variable names, but never API key values.
+in preferences contain endpoints, model names, and secret environment-variable names, never API key
+values. API keys entered in Studio are stored in the OS keychain (macOS Keychain, Linux Secret
+Service) through `credential-keychain-kotlin`, keyed by profile ID, and are sent to Amoo only when it
+advertises the `providers.apiKey` capability.
 
 Studio launches `amoo studio serve` and communicates through versioned JSON-RPC over framed stdio.
 The GUI never parses human-oriented CLI output.
@@ -20,6 +23,7 @@ actions. Composables remain stateless aside from strictly visual state.
 ## Dependencies
 
 - `process-rpc-kotlin` supervises the bundled child process and transports JSON-RPC messages.
+- `credential-keychain-kotlin` stores provider API keys in the platform's secure storage.
 - Compose Multiplatform renders the desktop interface.
 - A released Amoo executable is embedded as an OS/architecture-specific resource for distribution.
 

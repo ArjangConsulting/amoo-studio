@@ -45,4 +45,5 @@ operations to be removed. Test execution remains disabled until an executable pl
 authored intent from being reported as if it had run.
 
 Provider profiles are not part of `.amootest` files. Studio stores provider endpoints, model names,
-and API-key environment-variable names in user preferences. API key values are never written by Studio.
+and API-key environment-variable names in user preferences. API key values are never written to
+preferences or test files; Studio keeps them only in the OS keychain.

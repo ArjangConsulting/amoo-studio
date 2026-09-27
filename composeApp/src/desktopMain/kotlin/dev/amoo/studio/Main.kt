@@ -12,6 +12,7 @@ import dev.amoo.composeapp.generated.resources.icon_512
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.maniramezan.credentialkeychain.CredentialKeychain
 import io.github.maniramezan.processrpc.BundledBinaryLocator
 import io.github.maniramezan.processrpc.ProcessRpcClient
 import io.github.maniramezan.processrpc.ProcessRpcState
@@ -39,7 +40,9 @@ import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.File
+import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
+import kotlin.concurrent.thread
 import javax.imageio.ImageIO
 import javax.swing.JFileChooser
 
@@ -53,7 +56,21 @@ private data class Handshake(
 
 @Serializable private data class DeviceListResult(val devices: List<StudioDevice>)
 @Serializable private data class OperationResult(val message: String, val artifactPath: String? = null)
-@Serializable private data class ChatRequest(val provider: ProviderProfile, val messages: List<ChatMessage>, val activeTest: AmooTest)
+/** Wire form of [ProviderProfile]; [apiKey] is only sent to Amoo builds that advertise [PROVIDER_API_KEY_CAPABILITY]. */
+@Serializable private data class ProviderRequest(
+	val id: String,
+	val name: String,
+	val kind: ProviderKind,
+	val baseUrl: String,
+	val model: String,
+	val apiKeyEnvironmentVariable: String,
+	val apiKey: Secret? = null,
+)
+private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderRequest(
+	id, name, kind, baseUrl, model, apiKeyEnvironmentVariable,
+	apiKey.takeIf { !it.isBlank && connection.supports(PROVIDER_API_KEY_CAPABILITY) },
+)
+@Serializable private data class ChatRequest(val provider: ProviderRequest, val messages: List<ChatMessage>, val activeTest: AmooTest)
 @Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
 @Serializable private data class ProviderCheckResult(val message: String)
 @Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
@@ -74,7 +91,10 @@ private class StudioController(
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 	private val testFileStore = AmooTestFileStore(json)
-	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = loadProviders(), chat = ChatState(messages = loadChatMessages())))
+	private val providerStore = ProviderStore(preferences, CredentialKeychain.forCurrentPlatform("amoo-studio"), json)
+	// Keychain access can block or prompt; a single worker also keeps writes and deletes in order.
+	private val keychainDispatcher = Dispatchers.IO.limitedParallelism(1)
+	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = providerStore.loadProfiles(), chat = ChatState(messages = loadChatMessages())))
 	private val client = ProcessRpcClient(command = {
 		listOf(locateAmoo(), "studio", "serve")
 	})
@@ -83,6 +103,7 @@ private class StudioController(
 	private var testRunJob: Job? = null
 
 	init {
+		loadApiKeys()
 		client.start()
 		scope.launch {
 			client.state.collect { processState ->
@@ -129,7 +150,8 @@ private class StudioController(
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
 			StudioEvent.CopyInstallCommands -> copyInstallCommands()
 			StudioEvent.RefreshMcpStatus -> refreshMcpStatus()
-			is StudioEvent.SaveProvider, is StudioEvent.RemoveProvider -> persistProviders()
+			is StudioEvent.SaveProvider -> saveProvider(event.profile)
+			is StudioEvent.RemoveProvider -> removeProvider(event.id)
 			is StudioEvent.CheckProvider -> checkProvider(event.id)
 			StudioEvent.RefreshDevices -> refreshDevices()
 			is StudioEvent.SelectSection -> when (event.section) {
@@ -293,8 +315,8 @@ private class StudioController(
 		scope.launch(Dispatchers.IO) {
 			val result = runCatching {
 				val brew = locateHomebrew()
-				runShellCommand(listOf(brew, "tap", "arjangconsulting/tap"))
-				runShellCommand(listOf(brew, "install", "amoo"))
+				runShellCommand(listOf(brew, "tap", AMOO_HOMEBREW_TAP))
+				runShellCommand(listOf(brew, "install", AMOO_HOMEBREW_FORMULA))
 			}
 			withContext(Dispatchers.Main) {
 				result.onSuccess {
@@ -308,10 +330,17 @@ private class StudioController(
 		}
 	}
 
-	private fun runShellCommand(command: List<String>) {
-		val process = ProcessBuilder(command).redirectErrorStream(true).start()
-		val output = process.inputStream.bufferedReader().readText()
-		val exitCode = process.waitFor()
+	private fun runShellCommand(command: List<String>, timeoutMinutes: Long = 20) {
+		val process = ProcessBuilder(command).redirectErrorStream(true).redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
+		// Drain output on its own thread so a chatty or stalled process can't block the timeout below.
+		val output = StringBuilder()
+		val reader = thread(isDaemon = true) { process.inputStream.bufferedReader().use { output.append(it.readText()) } }
+		if (!process.waitFor(timeoutMinutes, TimeUnit.MINUTES)) {
+			process.destroyForcibly()
+			throw IllegalStateException("${command.joinToString(" ")} timed out after $timeoutMinutes minutes")
+		}
+		reader.join(5_000)
+		val exitCode = process.exitValue()
 		if (exitCode != 0) throw IllegalStateException("${command.joinToString(" ")} failed (exit $exitCode): ${output.trim().takeLast(500)}")
 	}
 
@@ -338,10 +367,14 @@ private class StudioController(
 			return
 		}
 		if (input.isEmpty() || chatJob?.isActive == true) return
+		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
+			state.value = state.value.copy(notice = problem)
+			return
+		}
 		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
 		state.value = state.value.reduce(StudioEvent.ChatRequestStarted(userMessage))
 		persistChatMessages()
-		val request = ChatRequest(provider, snapshot.chat.messages + userMessage, snapshot.test)
+		val request = ChatRequest(provider.toRequest(snapshot.connection), snapshot.chat.messages + userMessage, snapshot.test)
 		chatJob = scope.launch {
 			runCatching { json.decodeFromJsonElement<ChatResult>(client.call("chat.send", json.encodeToJsonElement(request))) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message), result.proposedPlan)); persistChatMessages() }
@@ -354,9 +387,14 @@ private class StudioController(
 
 	private fun checkProvider(id: String) {
 		if (!requireCapability("providers.check")) return
-		val provider = state.value.providers.firstOrNull { it.id == id } ?: return
+		val snapshot = state.value
+		val provider = snapshot.providers.firstOrNull { it.id == id } ?: return
+		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
+			state.value = state.value.reduce(StudioEvent.ProviderCheckFailed(id, problem))
+			return
+		}
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<ProviderCheckResult>(client.call("providers.check", json.encodeToJsonElement(provider))) }
+			runCatching { json.decodeFromJsonElement<ProviderCheckResult>(client.call("providers.check", json.encodeToJsonElement(provider.toRequest(snapshot.connection)))) }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.ProviderCheckFinished(id, it.message)) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.ProviderCheckFailed(id, "Connection failed: ${it.message}")) }
 		}
@@ -367,6 +405,7 @@ private class StudioController(
 		val snapshot = state.value
 		val command = snapshot.console.input.trim()
 		if (command.isEmpty() || consoleJob?.isActive == true) return
+		// Fast feedback only; Amoo's repl.execute rejects the same commands, which is the real boundary.
 		if (command.contains(Regex("(^|\\s)(reset|erase|delete|uninstall)(\\s|$)", RegexOption.IGNORE_CASE))) {
 			state.value = state.value.copy(notice = "Destructive commands must use the confirmed workflow in Devices")
 			return
@@ -410,6 +449,9 @@ private class StudioController(
 		runCatching { json.decodeFromJsonElement<TestStartResult>(client.call("tests.start", json.encodeToJsonElement(request))) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${it.message}")); testRunJob = null }
 			.onSuccess { started ->
+				// Poll quickly while operations advance and back off to 1s while one is long-running.
+				var pollDelayMillis = 250L
+				var lastOperation = -1
 				while (testRunJob?.isActive == true) {
 					val status = runCatching {
 						json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", started.runId) }))
@@ -417,9 +459,15 @@ private class StudioController(
 						state.value = state.value.reduce(StudioEvent.TestRunFailed("Test progress failed: ${it.message}"))
 						break
 					}
+					if (status.runId != started.runId) {
+						state.value = state.value.reduce(StudioEvent.TestRunFailed("Test progress failed: Amoo reported run ${status.runId} while tracking ${started.runId}"))
+						break
+					}
 					state.value = state.value.reduce(StudioEvent.TestRunProgress(status.runId, status.message, status.currentOperation, status.totalOperations))
+					pollDelayMillis = if (status.currentOperation != lastOperation) 250L else (pollDelayMillis * 2).coerceAtMost(1_000)
+					lastOperation = status.currentOperation
 					when (status.state) {
-						TestRunState.Running -> delay(250)
+						TestRunState.Running -> delay(pollDelayMillis)
 						TestRunState.Passed -> { state.value = state.value.reduce(StudioEvent.TestRunFinished(status.message, status.sessionId, status.reportId)); break }
 						TestRunState.Failed -> { state.value = state.value.reduce(StudioEvent.TestRunFailed(status.message)); break }
 						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = status.message); break }
@@ -464,9 +512,15 @@ private class StudioController(
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestExportFailed("Could not write file: ${it.message}")) }
 	}
 
-	private fun loadProviders(): List<ProviderProfile> = runCatching {
-		preferences.get("providers", null)?.let { json.decodeFromString<List<ProviderProfile>>(it) }
-	}.getOrNull() ?: defaultProviders()
+	private fun loadApiKeys() = scope.launch {
+		val profiles = state.value.providers
+		val result = withContext(keychainDispatcher) { providerStore.loadApiKeys(profiles.map { it.id }) }
+		state.value = state.value.reduce(StudioEvent.ProviderApiKeysLoaded(result.keys))
+		if (result.failures.isNotEmpty()) {
+			val names = profiles.filter { it.id in result.failures }.joinToString { it.name }
+			state.value = state.value.copy(notice = "Could not read API keys for $names from the keychain: ${result.failures.values.first().message}")
+		}
+	}
 
 	private fun loadChatMessages(): List<ChatMessage> = runCatching {
 		preferences.get("chatMessages", null)?.let { json.decodeFromString<List<ChatMessage>>(it) }
@@ -486,8 +540,24 @@ private class StudioController(
 			.onFailure { state.value = state.value.copy(notice = "Could not save appearance: ${it.message}") }
 	}
 
-	private fun persistProviders() {
-		runCatching { preferences.put("providers", json.encodeToString(state.value.providers)) }
+	private fun saveProvider(profile: ProviderProfile) {
+		persistProfiles()
+		scope.launch {
+			runCatching { withContext(keychainDispatcher) { providerStore.saveApiKey(profile.id, profile.apiKey) } }
+				.onFailure { state.value = state.value.copy(notice = "Could not save the API key for ${profile.name} to the keychain: ${it.message}") }
+		}
+	}
+
+	private fun removeProvider(id: String) {
+		persistProfiles()
+		scope.launch {
+			runCatching { withContext(keychainDispatcher) { providerStore.deleteApiKey(id) } }
+				.onFailure { state.value = state.value.copy(notice = "Removed the provider, but could not delete its API key from the keychain: ${it.message}") }
+		}
+	}
+
+	private fun persistProfiles() {
+		runCatching { providerStore.saveProfiles(state.value.providers) }
 			.onFailure { state.value = state.value.copy(notice = "Could not save providers: ${it.message}") }
 	}
 

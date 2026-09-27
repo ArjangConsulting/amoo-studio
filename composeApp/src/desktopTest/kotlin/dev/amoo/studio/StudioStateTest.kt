@@ -216,6 +216,96 @@ class StudioStateTest {
 	}
 
 	@Test
+	fun `removing a provider clears its stale check state`() {
+		val failed = StudioState()
+			.reduce(StudioEvent.CheckProvider("ollama"))
+			.reduce(StudioEvent.ProviderCheckFailed("ollama", "Connection failed"))
+
+		val removed = failed.reduce(StudioEvent.RemoveProvider("ollama"))
+
+		assertEquals(null, removed.providerChecks["ollama"])
+	}
+
+	@Test
+	fun `re-adding a provider with the same id does not resurrect a stale check result`() {
+		val provider = ProviderProfile("openai", "Work OpenAI", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5", "OPENAI_API_KEY")
+		val failed = StudioState()
+			.reduce(StudioEvent.SaveProvider(provider))
+			.reduce(StudioEvent.CheckProvider(provider.id))
+			.reduce(StudioEvent.ProviderCheckFailed(provider.id, "Connection failed"))
+			.reduce(StudioEvent.RemoveProvider(provider.id))
+
+		val readded = failed.reduce(StudioEvent.SaveProvider(provider))
+
+		assertEquals(null, readded.providerChecks[provider.id])
+	}
+
+	@Test
+	fun `editing a provider replaces it in place and closes the editor`() {
+		val first = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5")
+		val second = ProviderProfile("b", "B", ProviderKind.Ollama, "http://localhost:11434", "qwen")
+		val editing = StudioState(providers = listOf(first, second)).reduce(StudioEvent.EditProvider("a"))
+		assertEquals("a", editing.editingProviderId)
+
+		val saved = editing.reduce(StudioEvent.SaveProvider(first.copy(name = "Renamed", apiKey = Secret("sk-new"))))
+
+		assertEquals(listOf("a", "b"), saved.providers.map { it.id })
+		assertEquals("Renamed", saved.providers.first().name)
+		assertEquals(null, saved.editingProviderId)
+	}
+
+	@Test
+	fun `editing ignores unknown providers and removing the edited provider closes the editor`() {
+		val provider = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5")
+		val state = StudioState(providers = listOf(provider))
+
+		assertEquals(null, state.reduce(StudioEvent.EditProvider("missing")).editingProviderId)
+		assertEquals(null, state.reduce(StudioEvent.EditProvider("a")).reduce(StudioEvent.RemoveProvider("a")).editingProviderId)
+	}
+
+	@Test
+	fun `loaded API keys fill only providers that have no key yet`() {
+		val loaded = StudioState(
+			providers = listOf(
+				ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5"),
+				ProviderProfile("b", "B", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5", apiKey = Secret("sk-edited")),
+			),
+		).reduce(StudioEvent.ProviderApiKeysLoaded(mapOf("a" to Secret("sk-a"), "b" to Secret("sk-stale"))))
+
+		assertEquals(listOf("sk-a", "sk-edited"), loaded.providers.map { it.apiKey.value })
+		assertTrue(loaded.providerApiKeysLoaded)
+	}
+
+	@Test
+	fun `secrets never appear in string or serialized provider forms`() {
+		val profile = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5", apiKey = Secret("sk-super-secret-value-1234"))
+
+		assertTrue("sk-super-secret" !in profile.toString())
+		assertTrue("sk-super-secret" !in Json.encodeToString(ProviderProfile.serializer(), profile))
+		assertEquals("••••1234", profile.apiKey.hint)
+		assertEquals("••••", Secret("short").hint)
+	}
+
+	@Test
+	fun `provider credentials require a capability-supported key or an environment variable`() {
+		val openAi = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5")
+		val legacy = ConnectionState.Ready("0.1.0", 1, listOf("chat.send"))
+		val current = ConnectionState.Ready("0.2.0", 1, listOf("chat.send", PROVIDER_API_KEY_CAPABILITY))
+
+		assertEquals(null, legacy.providerCredentialProblem(openAi.copy(kind = ProviderKind.Ollama)))
+		assertEquals(null, legacy.providerCredentialProblem(openAi.copy(apiKeyEnvironmentVariable = "OPENAI_API_KEY", apiKey = Secret("sk"))))
+		assertEquals(null, current.providerCredentialProblem(openAi.copy(apiKey = Secret("sk"))))
+		assertTrue(legacy.providerCredentialProblem(openAi.copy(apiKey = Secret("sk")))!!.contains("Update Amoo"))
+		assertTrue(current.providerCredentialProblem(openAi)!!.contains("Add an API key"))
+	}
+
+	@Test
+	fun `provider ids are derived from trimmed name and model`() {
+		assertEquals(providerId("Work OpenAI", "gpt-5"), providerId("  Work OpenAI ", "gpt-5 "))
+		assertTrue(providerId("Work OpenAI", "gpt-5").startsWith("provider-work-openai-"))
+	}
+
+	@Test
 	fun `console suggestions include selected runtime context`() {
 		val state = StudioState(
 			console = ConsoleState(input = "pixel"),

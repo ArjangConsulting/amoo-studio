@@ -29,9 +29,12 @@ Current methods:
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
 | `mcp.status` | Report MCP readiness, transport, and launch arguments |
 
-`chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration
-and an environment-variable name, never secret values. Amoo resolves the environment variable and
-owns provider networking. Session and report methods will be added to the Swift-owned protocol.
+`chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration,
+an API-key environment-variable name, and an optional `apiKey`. Studio sends `apiKey` only when Amoo
+advertises the `providers.apiKey` capability; Amoo uses it in preference to the environment variable,
+never persists or logs it, and owns provider networking. Against older Amoo builds Studio omits the
+key and asks the user to configure the environment variable instead. `providers.check` accepts the
+same profile shape. `repl.execute` and `tests.*` carry only the provider ID and never need the key. Session and report methods will be added to the Swift-owned protocol.
 Their Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.
 
 `devices.create` accepts `platform`, `name`, `runtime`, and `deviceType`, returning the standard

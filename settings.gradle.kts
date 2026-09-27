@@ -29,4 +29,22 @@ if (providers.gradleProperty("useLocalKmpComponents").orNull.toBoolean()) {
 	includeBuild(localKmpComponents)
 }
 
+// credential-keychain-kotlin is resolved from Maven Central by default. Point the build at a local
+// checkout with -PuseLocalCredentialKeychain=true (optionally -PlocalCredentialKeychainPath=...);
+// when the property is unset, a sibling checkout is used automatically if one exists.
+val localCredentialKeychain = file(providers.gradleProperty("localCredentialKeychainPath").orNull ?: "../credential-keychain-kotlin")
+val useLocalCredentialKeychain = providers.gradleProperty("useLocalCredentialKeychain").orNull?.toBoolean()
+	?: localCredentialKeychain.resolve("settings.gradle.kts").isFile
+if (useLocalCredentialKeychain) {
+	require(localCredentialKeychain.resolve("settings.gradle.kts").isFile) {
+		"useLocalCredentialKeychain requires credential-keychain-kotlin at ${localCredentialKeychain.path}"
+	}
+	includeBuild(localCredentialKeychain) {
+		// The library's Gradle project is :core but it publishes as credential-keychain-kotlin.
+		dependencySubstitution {
+			substitute(module("com.maniramezan:credential-keychain-kotlin")).using(project(":core"))
+		}
+	}
+}
+
 include(":composeApp")

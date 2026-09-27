@@ -1,7 +1,9 @@
 package dev.amoo.studio
 
 import androidx.compose.runtime.Immutable
+import kotlin.jvm.JvmInline
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Immutable
 data class StudioState(
@@ -22,6 +24,8 @@ data class StudioState(
 	val providers: List<ProviderProfile> = defaultProviders(),
 	val selectedProviderId: String? = null,
 	val providerChecks: Map<String, ProviderCheckState> = emptyMap(),
+	val providerApiKeysLoaded: Boolean = false,
+	val editingProviderId: String? = null,
 	val chat: ChatState = ChatState(),
 	val console: ConsoleState = ConsoleState(),
 	val notice: String? = null,
@@ -133,9 +137,46 @@ data class ProviderProfile(
 	val baseUrl: String,
 	val model: String,
 	val apiKeyEnvironmentVariable: String = "",
+	/** Held in memory only: desktopMain keeps it in the OS keychain and it is never serialized with the profile. */
+	@Transient val apiKey: Secret = Secret.Empty,
 )
 
-@Serializable enum class ProviderKind(val label: String) { OpenAI("OpenAI"), Anthropic("Claude / Anthropic"), Ollama("Ollama"), Custom("OpenAI-compatible") }
+/** A credential whose [toString] never reveals its value, so it cannot leak through logs, notices, or data-class dumps. */
+@Serializable
+@JvmInline
+value class Secret(val value: String) {
+	val isBlank: Boolean get() = value.isBlank()
+
+	/** A display hint such as `••••a1b2`; values too short to hint without revealing much show dots only. */
+	val hint: String get() = if (value.length >= 16) "••••${value.takeLast(4)}" else "••••"
+
+	override fun toString(): String = if (value.isEmpty()) "Secret(empty)" else "Secret(redacted)"
+
+	companion object { val Empty = Secret("") }
+}
+
+/** Advertised by Amoo builds that accept an API key inline with a provider profile. */
+const val PROVIDER_API_KEY_CAPABILITY = "providers.apiKey"
+
+/** Why [profile] can't authenticate against the connected Amoo, or null when it can. */
+fun ConnectionState.providerCredentialProblem(profile: ProviderProfile): String? = when {
+	profile.kind == ProviderKind.Ollama -> null
+	!profile.apiKey.isBlank && supports(PROVIDER_API_KEY_CAPABILITY) -> null
+	profile.apiKeyEnvironmentVariable.isNotBlank() -> null
+	!profile.apiKey.isBlank -> "The connected Amoo version can't use API keys stored by Studio. Update Amoo or set an API key environment variable for ${profile.name}."
+	else -> "Add an API key or an API key environment variable for ${profile.name}."
+}
+
+/** Derives a provider's id from its display name and model; saving the same pair again replaces the profile. */
+fun providerId(name: String, model: String): String =
+	"provider-${name.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}-${model.trim().hashCode()}"
+
+@Serializable enum class ProviderKind(val label: String, val defaultBaseUrl: String, val defaultApiKeyEnvironmentVariable: String) {
+	OpenAI("OpenAI", "https://api.openai.com/v1", "OPENAI_API_KEY"),
+	Anthropic("Claude / Anthropic", "https://api.anthropic.com", "ANTHROPIC_API_KEY"),
+	Ollama("Ollama", "http://localhost:11434", ""),
+	Custom("OpenAI-compatible", "https://api.openai.com/v1", "OPENAI_API_KEY"),
+}
 sealed interface ProviderCheckState { data object Checking : ProviderCheckState; data class Ready(val message: String) : ProviderCheckState; data class Failed(val message: String) : ProviderCheckState }
 
 @Immutable
@@ -180,8 +221,10 @@ sealed interface DeviceOperation { data object Idle : DeviceOperation; data clas
 data class PendingApproval(val title: String, val message: String, val action: ApprovedAction, val confirmLabel: String = "Confirm")
 sealed interface ApprovedAction { data object ResetAppData : ApprovedAction; data object InstallAmoo : ApprovedAction }
 
-const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap arjangconsulting/tap"
-const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install amoo"
+const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
+const val AMOO_HOMEBREW_FORMULA = "amoo"
+const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap $AMOO_HOMEBREW_TAP"
+const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install $AMOO_HOMEBREW_FORMULA"
 
 fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.8:27b-mlx"))
 
@@ -229,6 +272,9 @@ sealed interface StudioEvent {
 	data class OpenReportArtifact(val path: String) : StudioEvent
 	data class SaveProvider(val profile: ProviderProfile) : StudioEvent
 	data class RemoveProvider(val id: String) : StudioEvent
+	data class EditProvider(val id: String) : StudioEvent
+	data object CancelProviderEdit : StudioEvent
+	data class ProviderApiKeysLoaded(val keys: Map<String, Secret>) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
 	data class CheckProvider(val id: String) : StudioEvent
 	data class ProviderCheckFinished(val id: String, val message: String) : StudioEvent
@@ -347,8 +393,20 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ReportsLoaded -> copy(reports = event.reports, reportsLoading = false, selectedReportId = selectedReportId?.takeIf { id -> event.reports.any { it.id == id } } ?: event.reports.firstOrNull()?.id)
 	is StudioEvent.ReportsFailed -> copy(reportsLoading = false, notice = event.message)
 	is StudioEvent.SelectReport -> copy(selectedReportId = event.id)
-	is StudioEvent.SaveProvider -> copy(providers = providers.filterNot { it.id == event.profile.id } + event.profile, selectedProviderId = event.profile.id, notice = "Provider saved")
-	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id })
+	is StudioEvent.SaveProvider -> copy(
+		providers = if (providers.any { it.id == event.profile.id }) providers.map { if (it.id == event.profile.id) event.profile else it } else providers + event.profile,
+		selectedProviderId = event.profile.id,
+		providerChecks = providerChecks - event.profile.id,
+		editingProviderId = null,
+		notice = "Provider saved",
+	)
+	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id }, providerChecks = providerChecks - event.id, editingProviderId = editingProviderId.takeUnless { it == event.id })
+	is StudioEvent.EditProvider -> copy(editingProviderId = event.id.takeIf { id -> providers.any { it.id == id } })
+	StudioEvent.CancelProviderEdit -> copy(editingProviderId = null)
+	is StudioEvent.ProviderApiKeysLoaded -> copy(
+		providers = providers.map { profile -> event.keys[profile.id]?.takeIf { profile.apiKey.isBlank }?.let { profile.copy(apiKey = it) } ?: profile },
+		providerApiKeysLoaded = true,
+	)
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)
 	is StudioEvent.CheckProvider -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Checking))
 	is StudioEvent.ProviderCheckFinished -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Ready(event.message)))

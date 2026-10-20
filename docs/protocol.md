@@ -35,6 +35,9 @@ Current methods:
 | `tests.export` | Generate native test source from an authored typed test |
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
 | `mcp.status` | Report MCP readiness, transport, and launch arguments |
+| `tools.catalog` | The console and plan vocabulary (`tools.catalog` capability) |
+| `repl.complete` | Complete a console line, including on-screen elements (`repl.complete`) |
+| `repl.validate` | Diagnostics for a console line (`repl.validate`) |
 
 Notifications pushed by Amoo:
 
@@ -78,3 +81,51 @@ does not move or reinterpret backend-owned artifacts.
 `mcp.status` returns availability, transport, and arguments for the backend's MCP server. Studio
 still resolves the packaged executable locally when generating client configuration and never proxies
 MCP traffic.
+
+## Console catalog
+
+When Amoo advertises `tools.catalog`, Studio loads it after the handshake and uses it for the
+console grammar, "Add to test plan", and the plan editor. Older Amoo builds keep
+`ToolCatalog.Legacy`, the fixed command set they understand.
+
+- **Tools.** Each tool has typed arguments with known `values`. It also carries `readOnly`,
+  `destructive`, `replSupported`, and `planTool`, the name a compiled plan records it under
+  (`assert_absent` records as `assert_not_visible`).
+- **Shared grammar.** `ReplGrammar` is a Kotlin port of Amoo's `StudioReplGrammar`, and their test
+  suites mirror each other. Studio uses it for immediate validation, and to complete and validate
+  on its own against Amoo builds without `repl.complete` or `repl.validate`.
+- **Positions.** Both grammars use UTF-16 positions, which are Kotlin string indices.
+- **Requests.** `repl.execute` carries the selected device's `platform` and `captureScreenshot: true`.
+- **Results.** Results with `repl.structuredResults` add:
+  - `isError`
+  - `tool`
+  - `structuredContent`, as JSON text
+  - `artifacts`
+  - `screenshot`, with path and geometry
+  - `gesturePoint`, in points
+
+  Console entries show the screenshot as a thumbnail that pins into the device pane, with the
+  gesture drawn over it.
+
+## Live device view
+
+The device pane mirrors the selected running device while Console or AI testing is on screen. Studio
+spawns `amoo device stream --platform <p> --device <id> --fps 6 --out <temp dir>` as its own process,
+separate from `amoo studio serve`, so frames never block the protocol stream. The stream captures on
+the host without a device lease, so it can watch a device the console or an agent is driving.
+
+- **Events.** Studio reads only these NDJSON fields:
+  - `started.directory`
+  - `frame.frame`, `frame.path`, `frame.width`, `frame.height`
+  - `error.message`
+  - `stopped`
+
+  Unknown events and fields are ignored.
+- **Frames.** Frames are decoded off the UI thread and conflated, so a slow decode skips frames
+  instead of queueing them.
+- **Failures.** A stream that exits with usage error 64 before `started` means Amoo predates
+  `device stream`, and the pane says so instead of retrying. Any other exit restarts with backoff
+  from 1 to 30 seconds, reset after frames arrive.
+- **Lifecycle.** The process is destroyed when the section, the device, or the pause state changes,
+  and when Studio closes.
+

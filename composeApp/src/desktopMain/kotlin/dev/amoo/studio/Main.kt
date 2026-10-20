@@ -1,5 +1,6 @@
 package dev.amoo.studio
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,7 +24,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -79,8 +85,16 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 @Serializable private data class ChatRequest(val provider: ProviderRequest, val messages: List<ChatMessage>, val activeTest: AmooTest)
 @Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
 @Serializable private data class ProviderCheckResult(val message: String)
-@Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
-@Serializable private data class ReplResult(val output: String)
+@Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?, val platform: String? = null, val captureScreenshot: Boolean = true)
+@Serializable private data class ReplResult(
+	val output: String,
+	val isError: Boolean? = null,
+	val tool: String? = null,
+	val structuredContent: String? = null,
+	val artifacts: List<String>? = null,
+	val screenshot: ScreenshotRef? = null,
+	val gesturePoint: GesturePoint? = null,
+)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private data class TestStartResult(val runId: String)
@@ -98,7 +112,17 @@ private class StudioController(
 	private val providerStore = ProviderStore(preferences, CredentialKeychain.forCurrentPlatform("amoo-studio"), json)
 	// Keychain access can block or prompt; a single worker also keeps writes and deletes in order.
 	private val keychainDispatcher = Dispatchers.IO.limitedParallelism(1)
-	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = providerStore.loadProfiles(), chat = ChatState(messages = loadChatMessages())))
+	val state = MutableStateFlow(StudioState(
+		hostPlatform = detectHostPlatform(),
+		themeMode = loadThemeMode(),
+		providers = providerStore.loadProfiles(),
+		chat = ChatState(messages = loadChatMessages()),
+		workbenchSplit = preferences.getFloat(WORKBENCH_SPLIT_KEY, DEFAULT_WORKBENCH_SPLIT),
+	))
+	val screenshotLoader: ScreenshotLoader = DesktopScreenshotLoader()
+	private val mirror = DeviceMirror(scope, AmooStreamLauncher(::locateAmoo), onEvent = { event ->
+		withContext(Dispatchers.Main) { state.value = state.value.reduce(event) }
+	})
 	private val client = ProcessRpcClient(command = {
 		listOf(locateAmoo(), "studio", "serve")
 	})
@@ -114,6 +138,8 @@ private class StudioController(
 		// Subscribe before starting the process: notifications are not replayed to late collectors.
 		scope.launch(start = CoroutineStart.UNDISPATCHED) { client.notifications.collect(::onNotification) }
 		client.start()
+		scope.launch { state.map { it.desiredMirrorDevice() }.distinctUntilChanged().collect(mirror::update) }
+		persistWorkbenchSplit()
 		scope.launch {
 			client.state.collect { processState ->
 				when (processState) {
@@ -142,9 +168,18 @@ private class StudioController(
 		try {
 			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
 			state.value = state.value.copy(connection = connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities))
+			loadToolCatalog()
 		} catch (error: Exception) {
 			state.value = state.value.copy(connection = ConnectionState.Unavailable(error.message ?: "Handshake failed"))
 		}
+	}
+
+	/** Replaces the legacy console vocabulary with Amoo's catalog; older builds keep [ToolCatalog.Legacy]. */
+	private suspend fun loadToolCatalog() {
+		if (!state.value.connection.supports(TOOLS_CATALOG_CAPABILITY)) return
+		runCatching { json.decodeFromJsonElement<ToolCatalog>(client.call("tools.catalog")) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.ToolCatalogLoaded(it)) }
+			.onFailure { state.value = state.value.copy(notice = "Could not load Amoo's tool catalog; the console uses its basic commands: ${it.message}") }
 	}
 
 	fun onEvent(event: StudioEvent) {
@@ -425,17 +460,23 @@ private class StudioController(
 		val snapshot = state.value
 		val command = snapshot.console.input.trim()
 		if (command.isEmpty() || consoleJob?.isActive == true) return
-		// Fast feedback only; Amoo's repl.execute rejects the same commands, which is the real boundary.
-		if (command.contains(Regex("(^|\\s)(reset|erase|delete|uninstall)(\\s|$)", RegexOption.IGNORE_CASE))) {
-			state.value = state.value.copy(notice = "Destructive commands must use the confirmed workflow in Devices")
+		// Fast feedback only: Amoo's repl.execute applies the same grammar and refuses destructive tools.
+		ReplGrammar(snapshot.toolCatalog).parse(command).diagnostics.firstOrNull { it.severity == ReplSeverity.Error }?.let {
+			state.value = state.value.copy(notice = it.message)
 			return
 		}
 		state.value = state.value.reduce(StudioEvent.ConsoleCommandStarted)
-		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId)
+		val platform = snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId }?.platform?.name?.lowercase()
+		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId, platform)
 		consoleJob = scope.launch {
 			val entry = runCatching { json.decodeFromJsonElement<ReplResult>(client.call("repl.execute", json.encodeToJsonElement(request))) }
 				.fold(
-					onSuccess = { ConsoleEntry("command-${System.nanoTime()}", command, it.output) },
+					onSuccess = {
+						ConsoleEntry(
+							"command-${System.nanoTime()}", command, it.output, failed = it.isError == true, tool = it.tool,
+							structuredContent = it.structuredContent, artifacts = it.artifacts.orEmpty(), screenshot = it.screenshot, gesturePoint = it.gesturePoint,
+						)
+					},
 					onFailure = { ConsoleEntry("command-${System.nanoTime()}", command, "Command failed: ${it.message}", failed = true) },
 				)
 			if (state.value.console.operation == ConsoleOperation.Running) state.value = state.value.reduce(StudioEvent.ConsoleCommandFinished(entry))
@@ -608,10 +649,17 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); client.close() }
+	// Dragging the divider emits many fractions; persist once it settles.
+	@OptIn(FlowPreview::class)
+	private fun persistWorkbenchSplit() = scope.launch {
+		state.map { it.workbenchSplit }.distinctUntilChanged().drop(1).debounce(500).collect { preferences.putFloat(WORKBENCH_SPLIT_KEY, it) }
+	}
+
+	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); mirror.close(); client.close() }
 }
 
 private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
+private const val WORKBENCH_SPLIT_KEY = "workbenchSplit"
 
 private fun detectHostPlatform(): HostPlatform {
 	val osName = System.getProperty("os.name").orEmpty().lowercase()
@@ -697,6 +745,8 @@ fun main() = application {
 		LaunchedEffect(Unit) {
 			installDockIcon()
 		}
-		AmooStudioApp(state, controller::onEvent)
+		CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader) {
+			AmooStudioApp(state, controller::onEvent)
+		}
 	}
 }

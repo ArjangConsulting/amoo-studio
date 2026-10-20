@@ -8,6 +8,11 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Advertised by Amoo builds that push `tests.progress` instead of requiring `tests.status` polling. */
 internal const val TESTS_PROGRESS_CAPABILITY = "tests.progress"
 
+/** Advertised by Amoo builds that serve `tools.catalog`, `repl.complete`, and `repl.validate`. */
+internal const val TOOLS_CATALOG_CAPABILITY = "tools.catalog"
+internal const val REPL_COMPLETE_CAPABILITY = "repl.complete"
+internal const val REPL_VALIDATE_CAPABILITY = "repl.validate"
+
 @Serializable internal data class TestRunStatus(val runId: String, val state: TestRunState, val currentOperation: Int, val totalOperations: Int, val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable internal enum class TestRunState { Running, Passed, Failed, Cancelled }
 

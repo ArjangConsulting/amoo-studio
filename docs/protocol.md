@@ -3,6 +3,13 @@
 Studio starts `amoo studio serve` and communicates through JSON-RPC 2.0 over Content-Length-framed
 standard input/output. The framing and process lifecycle are supplied by `process-rpc-kotlin`.
 
+Amoo answers requests concurrently when it advertises `rpc.concurrent`. Responses may arrive in any
+order and are correlated by ID; work on one device is still applied in arrival order. When Amoo
+advertises `rpc.notifications`, it also pushes JSON-RPC notifications (a `method` and no `id`) on the
+same stream. Studio subscribes before launching the process and ignores notification methods it does
+not recognize. Handler failures keep the request `id` and use standard codes: `-32700` parse error,
+`-32600` invalid request, `-32601` unknown method, `-32602` invalid params, `-32603` internal error.
+
 The first request must be `system.handshake`. Studio validates `protocolVersion` and reads advertised
 capabilities before enabling screens. Unknown additive capabilities are ignored; required missing
 capabilities disable only the affected feature and show remediation.
@@ -29,6 +36,12 @@ Current methods:
 | `reports.list` | List report summaries and artifact paths owned by Amoo |
 | `mcp.status` | Report MCP readiness, transport, and launch arguments |
 
+Notifications pushed by Amoo:
+
+| Method | Capability | Params |
+| --- | --- | --- |
+| `tests.progress` | `tests.progress` | The same status object `tests.status` returns, sent whenever an asynchronous run changes |
+
 `chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration,
 an API-key environment-variable name, and an optional `apiKey`. Studio sends `apiKey` only when Amoo
 advertises the `providers.apiKey` capability; Amoo uses it in preference to the environment variable,
@@ -50,6 +63,9 @@ workflow with an explicit approval event.
 It returns a user-facing summary plus optional `sessionId` and `reportId`. Cancelling in Studio stops
 waiting for legacy backends. When `tests.start`, `tests.status`, and `tests.cancel` are advertised,
 Studio uses the asynchronous workflow, renders per-operation progress, and cancels the backend task.
+With `tests.progress`, Studio follows pushed statuses instead of polling. A run can report progress
+before `tests.start` returns its ID, so Studio keeps the latest status per run ID, and it calls
+`tests.status` every 5 seconds without a notification in case one was dropped.
 
 `tests.export` is enabled only when the handshake advertises that capability. It accepts
 `{ "test": <authored test> }` and returns `{ "fileName": "...", "source": "..." }`. Amoo owns

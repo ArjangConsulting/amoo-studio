@@ -16,12 +16,18 @@ import com.maniramezan.credentialkeychain.CredentialKeychain
 import io.github.maniramezan.processrpc.BundledBinaryLocator
 import io.github.maniramezan.processrpc.ProcessRpcClient
 import io.github.maniramezan.processrpc.ProcessRpcState
+import io.github.maniramezan.processrpc.RpcNotification
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
@@ -78,8 +84,6 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private data class TestStartResult(val runId: String)
-@Serializable private data class TestRunStatus(val runId: String, val state: TestRunState, val currentOperation: Int, val totalOperations: Int, val message: String, val sessionId: String? = null, val reportId: String? = null)
-@Serializable private enum class TestRunState { Running, Passed, Failed, Cancelled }
 @Serializable private data class ReportListResult(val reports: List<TestReport>)
 @Serializable private data class TestExportRequest(val test: AmooTest)
 @Serializable private data class TestExportResult(val fileName: String, val source: String)
@@ -101,9 +105,14 @@ private class StudioController(
 	private var chatJob: Job? = null
 	private var consoleJob: Job? = null
 	private var testRunJob: Job? = null
+	// Latest pushed status per run. A run can report progress before tests.start has returned its ID,
+	// so statuses are kept by run ID rather than matched against the active run on arrival.
+	private val pushedRunStatuses = MutableStateFlow<Map<String, TestRunStatus>>(emptyMap())
 
 	init {
 		loadApiKeys()
+		// Subscribe before starting the process: notifications are not replayed to late collectors.
+		scope.launch(start = CoroutineStart.UNDISPATCHED) { client.notifications.collect(::onNotification) }
 		client.start()
 		scope.launch {
 			client.state.collect { processState ->
@@ -115,6 +124,17 @@ private class StudioController(
 					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.copy(connection = ConnectionState.Starting)
 				}
 			}
+		}
+	}
+
+	private fun onNotification(notification: RpcNotification) {
+		val decoded = runCatching { json.decodeAmooNotification(notification) }.getOrElse { error ->
+			System.err.println("Ignoring malformed ${notification.method} notification: ${error.message}")
+			return
+		}
+		when (decoded) {
+			is AmooNotification.TestProgress -> pushedRunStatuses.update { it + (decoded.status.runId to decoded.status) }
+			null -> Unit
 		}
 	}
 
@@ -449,13 +469,12 @@ private class StudioController(
 		runCatching { json.decodeFromJsonElement<TestStartResult>(client.call("tests.start", json.encodeToJsonElement(request))) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${it.message}")); testRunJob = null }
 			.onSuccess { started ->
-				// Poll quickly while operations advance and back off to 1s while one is long-running.
+				val pushed = state.value.connection.supports(TESTS_PROGRESS_CAPABILITY)
+				var previous: TestRunStatus? = null
+				// Polling backs off from 250 ms to 1 s while one operation is long-running.
 				var pollDelayMillis = 250L
-				var lastOperation = -1
 				while (testRunJob?.isActive == true) {
-					val status = runCatching {
-						json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", started.runId) }))
-					}.getOrElse {
+					val status = runCatching { nextRunStatus(started.runId, previous, pushed, pollDelayMillis) }.getOrElse {
 						state.value = state.value.reduce(StudioEvent.TestRunFailed("Test progress failed: ${it.message}"))
 						break
 					}
@@ -464,17 +483,34 @@ private class StudioController(
 						break
 					}
 					state.value = state.value.reduce(StudioEvent.TestRunProgress(status.runId, status.message, status.currentOperation, status.totalOperations))
-					pollDelayMillis = if (status.currentOperation != lastOperation) 250L else (pollDelayMillis * 2).coerceAtMost(1_000)
-					lastOperation = status.currentOperation
+					pollDelayMillis = if (status.currentOperation != previous?.currentOperation) 250L else (pollDelayMillis * 2).coerceAtMost(1_000)
+					previous = status
 					when (status.state) {
-						TestRunState.Running -> delay(pollDelayMillis)
+						TestRunState.Running -> Unit
 						TestRunState.Passed -> { state.value = state.value.reduce(StudioEvent.TestRunFinished(status.message, status.sessionId, status.reportId)); break }
 						TestRunState.Failed -> { state.value = state.value.reduce(StudioEvent.TestRunFailed(status.message)); break }
 						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = status.message); break }
 					}
 				}
+				pushedRunStatuses.update { it - started.runId }
 				testRunJob = null
 			}
+	}
+
+	/**
+	 * Waits for the run's next status. With [pushed] progress it waits for a notification that differs
+	 * from [previous], polling `tests.status` only as a heartbeat in case one was dropped; otherwise it
+	 * polls after [pollDelayMillis].
+	 */
+	private suspend fun nextRunStatus(runId: String, previous: TestRunStatus?, pushed: Boolean, pollDelayMillis: Long): TestRunStatus {
+		if (pushed) {
+			withTimeoutOrNull(PUSHED_PROGRESS_HEARTBEAT_MILLIS) {
+				pushedRunStatuses.mapNotNull { it[runId] }.first { it != previous }
+			}?.let { return it }
+		} else if (previous != null) {
+			delay(pollDelayMillis)
+		}
+		return json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", runId) }))
 	}
 
 	private fun cancelTestRun(runId: String?) {
@@ -574,6 +610,8 @@ private class StudioController(
 
 	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); client.close() }
 }
+
+private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
 
 private fun detectHostPlatform(): HostPlatform {
 	val osName = System.getProperty("os.name").orEmpty().lowercase()

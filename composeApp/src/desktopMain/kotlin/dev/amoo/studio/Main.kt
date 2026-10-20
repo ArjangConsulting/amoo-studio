@@ -622,11 +622,28 @@ private fun detectHostPlatform(): HostPlatform {
 	}
 }
 
-private fun locateAmoo(): String = locateExecutable(name = "amoo", environmentVariable = "AMOO_BINARY")
+// Extracted once per process: the first caller is the RPC launch on an IO thread, so the UI never waits.
+private val embeddedAmoo: Result<File?> by lazy {
+	runCatching {
+		AmooRuntimeInstaller(
+			resourcesDirectory = System.getProperty("compose.application.resources.dir")?.let(::File),
+			runtimeRoot = AmooRuntimeInstaller.defaultRuntimeRoot(detectHostPlatform()),
+		).install()
+	}
+}
+
+/** `AMOO_BINARY` wins for development; packaged builds then use their embedded runtime, which carries prebuilt companions. */
+private fun locateAmoo(): String {
+	if (System.getenv("AMOO_BINARY").isNullOrBlank()) {
+		embeddedAmoo.getOrThrow()?.let { return it.absolutePath }
+	}
+	return locateExecutable(name = "amoo", environmentVariable = "AMOO_BINARY")
+}
 
 private fun locateHomebrew(): String = locateExecutable(name = "brew")
 
-private fun isAmooMissing(): Boolean = System.getenv("AMOO_BINARY").isNullOrBlank() && runCatching { locateAmoo() }.isFailure
+// An embedded runtime that fails to extract is a broken install, not a missing Amoo: offering Homebrew would hide it.
+private fun isAmooMissing(): Boolean = System.getenv("AMOO_BINARY").isNullOrBlank() && embeddedAmoo.isSuccess && runCatching { locateAmoo() }.isFailure
 
 private fun locateExecutable(name: String, environmentVariable: String? = null): String {
 	if (environmentVariable != null) {

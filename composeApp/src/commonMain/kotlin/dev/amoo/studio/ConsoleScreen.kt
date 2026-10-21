@@ -8,13 +8,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.BorderStroke
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditor
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeSnippet
-import io.github.maniramezan.kmpcomponents.codeeditor.JsonRules
-import io.github.maniramezan.kmpcomponents.codeeditor.TokenRules
+import com.arjangconsulting.codeeditor.CodeEditor
+import com.arjangconsulting.codeeditor.CodeSnippet
+import com.arjangconsulting.codeeditor.JsonRules
+import com.arjangconsulting.codeeditor.TokenRules
 import androidx.compose.ui.text.style.TextOverflow
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditorLabels
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditorOptions
+import com.arjangconsulting.codeeditor.CodeEditorLabels
+import com.arjangconsulting.codeeditor.CodeEditorOptions
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 

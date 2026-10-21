@@ -21,7 +21,7 @@ dependencyResolutionManagement {
 	}
 }
 
-// KMPComponents (components and code-editor) resolves from Maven Central by default. A sibling
+// KMPComponents resolves from Maven Central by default. A sibling
 // checkout is included automatically when present; -PuseLocalKmpComponents=true|false overrides that.
 val localKmpComponents = file("../KMPComponents")
 val useLocalKmpComponents = providers.gradleProperty("useLocalKmpComponents").orNull?.toBoolean()
@@ -67,6 +67,19 @@ if (useLocalProcessRpc) {
 			substitute(module("com.github.maniramezan:process-rpc-kotlin")).using(project(":"))
 		}
 	}
+}
+
+// kmp-code-editor (com.arjangconsulting.codeeditor:code-editor) resolves from Maven Central by default. A
+// sibling checkout is included automatically when present; -PuseLocalCodeEditor=true|false overrides
+// that, and -PlocalCodeEditorPath=<path> points at another checkout.
+val localCodeEditor = file(providers.gradleProperty("localCodeEditorPath").orNull ?: "../kmp-code-editor")
+val useLocalCodeEditor = providers.gradleProperty("useLocalCodeEditor").orNull?.toBoolean()
+	?: localCodeEditor.resolve("settings.gradle.kts").isFile
+if (useLocalCodeEditor) {
+	require(localCodeEditor.resolve("settings.gradle.kts").isFile) {
+		"useLocalCodeEditor requires kmp-code-editor at ${localCodeEditor.path}"
+	}
+	includeBuild(localCodeEditor)
 }
 
 include(":composeApp")

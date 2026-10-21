@@ -1,10 +1,10 @@
 package dev.amoo.studio
 
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionItemKind
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionTrigger
-import io.github.maniramezan.kmpcomponents.codeeditor.DiagnosticSeverity
-import io.github.maniramezan.kmpcomponents.codeeditor.DocumentSnapshot
-import io.github.maniramezan.kmpcomponents.codeeditor.TextPosition
+import com.arjangconsulting.codeeditor.CompletionItemKind
+import com.arjangconsulting.codeeditor.CompletionTrigger
+import com.arjangconsulting.codeeditor.DiagnosticSeverity
+import com.arjangconsulting.codeeditor.DocumentSnapshot
+import com.arjangconsulting.codeeditor.TextPosition
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test

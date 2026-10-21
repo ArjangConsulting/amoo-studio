@@ -134,7 +134,7 @@ the host without a device lease, so it can watch a device the console or an agen
 
 ## Console editor
 
-The console line is a single-line `CodeEditor` from KMPComponents' `code-editor` module.
+The console line is a single-line `CodeEditor` from `kmp-code-editor`.
 `amooCommandRules` highlights it from the loaded catalog. Its `ConsoleLanguageService` asks Amoo
 through `ReplAssist` (`repl.complete` and `repl.validate`, with the selected device), so completion
 can offer elements on that device's screen.

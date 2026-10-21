@@ -16,8 +16,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeSnippet
-import io.github.maniramezan.kmpcomponents.codeeditor.tokenRules
+import com.arjangconsulting.codeeditor.CodeSnippet
+import com.arjangconsulting.codeeditor.tokenRules
 
 /** Highlights `name=value` arguments in the agent timeline. */
 private val AmooArgumentRules = tokenRules("amoo-arguments") {

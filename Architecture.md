@@ -25,7 +25,7 @@ actions. Composables remain stateless aside from strictly visual state.
 - `process-rpc-kotlin` supervises the bundled child process and transports JSON-RPC messages.
 - `credential-keychain-kotlin` stores provider API keys in the platform's secure storage.
 - Compose Multiplatform renders the desktop interface.
-- `code-editor` (KMPComponents) renders the console line, generated test source, and read-only
+- `kmp-code-editor` (`com.arjangconsulting.codeeditor:code-editor`) renders the console line, generated test source, and read-only
   code snippets: LSP-shaped completion and diagnostics, line highlights, and a virtualized
   Compose engine.
 - `amoo device stream`, spawned as its own process, feeds the live device pane without blocking

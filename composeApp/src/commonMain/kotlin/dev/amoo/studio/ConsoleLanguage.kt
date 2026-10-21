@@ -1,21 +1,21 @@
 package dev.amoo.studio
 
 import androidx.compose.runtime.staticCompositionLocalOf
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionItem
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionItemKind
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionList
-import io.github.maniramezan.kmpcomponents.codeeditor.CompletionTrigger
-import io.github.maniramezan.kmpcomponents.codeeditor.Diagnostic
-import io.github.maniramezan.kmpcomponents.codeeditor.DiagnosticSeverity
-import io.github.maniramezan.kmpcomponents.codeeditor.DocumentSnapshot
-import io.github.maniramezan.kmpcomponents.codeeditor.LanguageService
-import io.github.maniramezan.kmpcomponents.codeeditor.MarkupContent
-import io.github.maniramezan.kmpcomponents.codeeditor.TextEdit
-import io.github.maniramezan.kmpcomponents.codeeditor.TextPosition
-import io.github.maniramezan.kmpcomponents.codeeditor.TextRange
-import io.github.maniramezan.kmpcomponents.codeeditor.TokenKind
-import io.github.maniramezan.kmpcomponents.codeeditor.TokenRules
-import io.github.maniramezan.kmpcomponents.codeeditor.tokenRules
+import com.arjangconsulting.codeeditor.CompletionItem
+import com.arjangconsulting.codeeditor.CompletionItemKind
+import com.arjangconsulting.codeeditor.CompletionList
+import com.arjangconsulting.codeeditor.CompletionTrigger
+import com.arjangconsulting.codeeditor.Diagnostic
+import com.arjangconsulting.codeeditor.DiagnosticSeverity
+import com.arjangconsulting.codeeditor.DocumentSnapshot
+import com.arjangconsulting.codeeditor.LanguageService
+import com.arjangconsulting.codeeditor.MarkupContent
+import com.arjangconsulting.codeeditor.TextEdit
+import com.arjangconsulting.codeeditor.TextPosition
+import com.arjangconsulting.codeeditor.TextRange
+import com.arjangconsulting.codeeditor.TokenKind
+import com.arjangconsulting.codeeditor.TokenRules
+import com.arjangconsulting.codeeditor.tokenRules
 
 private val prettyPrinter = kotlinx.serialization.json.Json { prettyPrint = true }
 

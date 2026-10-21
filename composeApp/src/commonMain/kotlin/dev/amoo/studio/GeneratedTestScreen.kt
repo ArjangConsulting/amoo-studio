@@ -13,17 +13,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditor
-import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditorLabels
-import io.github.maniramezan.kmpcomponents.codeeditor.Diagnostic
-import io.github.maniramezan.kmpcomponents.codeeditor.DiagnosticSeverity
-import io.github.maniramezan.kmpcomponents.codeeditor.KotlinRules
-import io.github.maniramezan.kmpcomponents.codeeditor.LineHighlight
-import io.github.maniramezan.kmpcomponents.codeeditor.LineHighlightRole
-import io.github.maniramezan.kmpcomponents.codeeditor.PlainText
-import io.github.maniramezan.kmpcomponents.codeeditor.SwiftRules
-import io.github.maniramezan.kmpcomponents.codeeditor.TextPosition
-import io.github.maniramezan.kmpcomponents.codeeditor.TextRange as EditorRange
+import com.arjangconsulting.codeeditor.CodeEditor
+import com.arjangconsulting.codeeditor.CodeEditorLabels
+import com.arjangconsulting.codeeditor.Diagnostic
+import com.arjangconsulting.codeeditor.DiagnosticSeverity
+import com.arjangconsulting.codeeditor.KotlinRules
+import com.arjangconsulting.codeeditor.LineHighlight
+import com.arjangconsulting.codeeditor.LineHighlightRole
+import com.arjangconsulting.codeeditor.PlainText
+import com.arjangconsulting.codeeditor.SwiftRules
+import com.arjangconsulting.codeeditor.TextPosition
+import com.arjangconsulting.codeeditor.TextRange as EditorRange
 
 /** Generated native test source beside the plan it came from and each step's screenshot. */
 @Composable internal fun GeneratedTestContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {

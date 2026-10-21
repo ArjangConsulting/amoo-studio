@@ -1,6 +1,6 @@
 package dev.amoo.studio
 
-import io.github.maniramezan.kmpcomponents.codeeditor.DiagnosticSeverity
+import com.arjangconsulting.codeeditor.DiagnosticSeverity
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals

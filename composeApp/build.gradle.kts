@@ -60,7 +60,7 @@ kover {
 	reports {
 		verify {
 			rule("Studio line coverage") {
-				minBound(20)
+				minBound(50)
 			}
 		}
 	}

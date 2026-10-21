@@ -108,7 +108,7 @@ private fun mirrorStatusLabel(mirror: DeviceMirrorState, device: StudioDevice?):
 private fun mirrorPlaceholder(mirror: DeviceMirrorState, device: StudioDevice?): String = when {
 	device == null -> "Select a running simulator, emulator, or device to see it here."
 	device.status != DeviceStatus.Running -> "Start ${device.name} in Devices to see it here."
-	mirror.status is MirrorStatus.Unavailable -> (mirror.status as MirrorStatus.Unavailable).reason
+	mirror.status is MirrorStatus.Unavailable -> mirror.status.reason
 	mirror.paused -> "The live view is paused."
 	else -> "Waiting for the first frame…"
 }

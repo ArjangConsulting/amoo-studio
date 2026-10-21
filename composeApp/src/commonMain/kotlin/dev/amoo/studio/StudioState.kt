@@ -202,6 +202,7 @@ data class ConsoleState(
 	val entries: List<ConsoleEntry> = emptyList(),
 	val operation: ConsoleOperation = ConsoleOperation.Idle,
 	val historyIndex: Int? = null,
+	val recording: ConsoleRecording? = null,
 )
 
 /** A finished console command. [tool], [structuredContent], and [artifacts] come from Amoo builds with `repl.structuredResults`. */
@@ -215,6 +216,9 @@ data class ConsoleState(
 	val artifacts: List<String> = emptyList(),
 	val screenshot: ScreenshotRef? = null,
 	val gesturePoint: GesturePoint? = null,
+	/** Set when Amoo recorded the command into session [sessionId] as plan step `step-<actionIndex>`. */
+	val actionIndex: Int? = null,
+	val sessionId: String? = null,
 )
 sealed interface ConsoleOperation { data object Idle : ConsoleOperation; data object Running : ConsoleOperation }
 
@@ -315,6 +319,15 @@ sealed interface StudioEvent {
 	data class ConsoleCommandFinished(val entry: ConsoleEntry) : StudioEvent
 	data object CancelConsoleCommand : StudioEvent
 	data object ClearConsole : StudioEvent
+	data object StartConsoleRecording : StudioEvent
+	data class ConsoleRecordingStarted(val sessionId: String, val actionCount: Int) : StudioEvent
+	data object StopConsoleRecording : StudioEvent
+	data class ConsoleRecordingStopped(val actionCount: Int?, val planPath: String?, val message: String?) : StudioEvent
+	data class ConsoleRecordingFailed(val message: String) : StudioEvent
+	/** Amoo exited while recording; it ends recordings on shutdown, so what was recorded is kept. */
+	data object ConsoleRecordingInterrupted : StudioEvent
+	data object DismissConsoleRecording : StudioEvent
+	data object GenerateConsoleTest : StudioEvent
 	data class ShowNotice(val message: String?) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
 	data object RefreshMcpStatus : StudioEvent
@@ -477,9 +490,18 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	}
 	StudioEvent.ExecuteConsoleCommand -> this
 	StudioEvent.ConsoleCommandStarted -> copy(console = console.copy(operation = ConsoleOperation.Running), notice = null)
-	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(input = "", entries = console.entries + event.entry, operation = ConsoleOperation.Idle, historyIndex = null))
+	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(
+		input = "",
+		entries = console.entries + event.entry,
+		operation = ConsoleOperation.Idle,
+		historyIndex = null,
+		recording = console.recording?.recording(event.entry),
+	))
 	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
-	StudioEvent.ClearConsole -> copy(console = ConsoleState())
+	StudioEvent.ClearConsole -> copy(console = ConsoleState(recording = console.recording))
+	StudioEvent.StartConsoleRecording, is StudioEvent.ConsoleRecordingStarted, StudioEvent.StopConsoleRecording, is StudioEvent.ConsoleRecordingStopped,
+	is StudioEvent.ConsoleRecordingFailed, StudioEvent.ConsoleRecordingInterrupted, StudioEvent.DismissConsoleRecording, StudioEvent.GenerateConsoleTest,
+	-> reduceConsoleRecording(event)
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
 	StudioEvent.RefreshMcpStatus -> copy(mcpStatus = McpStatus.Checking)
 	is StudioEvent.McpStatusLoaded -> copy(mcpStatus = McpStatus.Ready(event.transport, event.arguments))

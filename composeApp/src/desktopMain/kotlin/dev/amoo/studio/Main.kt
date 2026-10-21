@@ -114,7 +114,12 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 	val artifacts: List<String>? = null,
 	val screenshot: ScreenshotRef? = null,
 	val gesturePoint: GesturePoint? = null,
+	val actionIndex: Int? = null,
+	val sessionId: String? = null,
 )
+@Serializable private data class ReplRecordingStartRequest(val deviceId: String, val platform: String, val appId: String, val buildPath: String? = null)
+@Serializable private data class ReplRecordingStopRequest(val deviceId: String)
+@Serializable private data class ReplRecording(val sessionId: String, val actionCount: Int, val planPath: String? = null, val message: String? = null)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private data class TestStartResult(val runId: String)
@@ -194,10 +199,10 @@ private class StudioController(
 			client.state.collect { processState ->
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
-					is ProcessRpcState.Unavailable -> state.value = state.value.copy(
+					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(
 						connection = ConnectionState.Unavailable(processState.reason, canInstallAmoo = isAmooMissing()),
 					)
-					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.copy(connection = ConnectionState.Starting)
+					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(connection = ConnectionState.Starting)
 				}
 			}
 		}
@@ -246,6 +251,8 @@ private class StudioController(
 			StudioEvent.ClearChat -> persistChatMessages()
 			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
+			StudioEvent.StartConsoleRecording -> startConsoleRecording()
+			StudioEvent.StopConsoleRecording -> stopConsoleRecording()
 			StudioEvent.RunTest -> runTest()
 			StudioEvent.CancelTestRun -> cancelTestRun(activeRunId)
 			StudioEvent.ExportTest -> exportTest()
@@ -281,7 +288,7 @@ private class StudioController(
 				null -> Unit
 			}
 			StudioEvent.CancelAgentRun -> cancelAgentRun()
-			is StudioEvent.GenerateTest, is StudioEvent.RegenerateTest -> generateTest()
+			is StudioEvent.GenerateTest, is StudioEvent.RegenerateTest, StudioEvent.GenerateConsoleTest -> generateTest()
 			StudioEvent.CopyGeneratedTest -> state.value.generatedTest?.generated?.let { copyToClipboard(it.source, "Generated test copied") }
 			StudioEvent.SaveGeneratedTest -> saveGeneratedTest()
 			StudioEvent.SteerAgentRun -> steerAgentRun()
@@ -473,11 +480,11 @@ private class StudioController(
 
 	private fun sendChat() {
 		val readiness = state.value.agentReadiness()
-		if (readiness is AgentReadiness.NoApp) {
+		if (readiness is SessionReadiness.NoApp) {
 			state.value = state.value.copy(notice = "Set the app's bundle or application ID in Devices so the agent can launch ${readiness.device.name}'s app")
 			return
 		}
-		if (readiness is AgentReadiness.Ready) {
+		if (readiness is SessionReadiness.Ready) {
 			startAgentRun(readiness)
 			return
 		}
@@ -514,7 +521,7 @@ private class StudioController(
 	private var agentWatchJob: Job? = null
 	private var lastAgentEventNanos = 0L
 
-	private fun startAgentRun(readiness: AgentReadiness.Ready) {
+	private fun startAgentRun(readiness: SessionReadiness.Ready) {
 		val snapshot = state.value
 		val input = snapshot.chat.input.trim()
 		if (input.isEmpty() || snapshot.agentRunActive) return
@@ -687,12 +694,35 @@ private class StudioController(
 						ConsoleEntry(
 							"command-${System.nanoTime()}", command, it.output, failed = it.isError == true, tool = it.tool,
 							structuredContent = it.structuredContent, artifacts = it.artifacts.orEmpty(), screenshot = it.screenshot, gesturePoint = it.gesturePoint,
+							actionIndex = it.actionIndex, sessionId = it.sessionId,
 						)
 					},
 					onFailure = { ConsoleEntry("command-${System.nanoTime()}", command, "Command failed: ${it.message}", failed = true) },
 				)
 			if (state.value.console.operation == ConsoleOperation.Running) state.value = state.value.reduce(StudioEvent.ConsoleCommandFinished(entry))
 			consoleJob = null
+		}
+	}
+
+	// MARK: Console recording
+
+	/** Starts the session the reducer just marked as starting. It can boot the device and build Amoo's companion, so it may take minutes. */
+	private fun startConsoleRecording() {
+		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Starting } ?: return
+		val request = ReplRecordingStartRequest(recording.device.id, recording.device.platform.name.lowercase(), recording.appId, state.value.lastBuildArtifact)
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.startRecording", json.encodeToJsonElement(request), timeoutMs = RECORDING_START_TIMEOUT_MILLIS)) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStarted(it.sessionId, it.actionCount)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not start recording: ${it.message}")) }
+		}
+	}
+
+	private fun stopConsoleRecording() {
+		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Stopping } ?: return
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.stopRecording", json.encodeToJsonElement(ReplRecordingStopRequest(recording.device.id)), timeoutMs = RECORDING_STOP_TIMEOUT_MILLIS)) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStopped(it.actionCount, it.planPath, it.message)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not stop recording: ${it.message}")) }
 		}
 	}
 
@@ -873,6 +903,9 @@ private class StudioController(
 private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
 private const val WORKBENCH_SPLIT_KEY = "workbenchSplit"
 private const val AGENT_HEARTBEAT_MILLIS = 5_000L
+// Starting a recording can boot the device and build the companion; stopping writes the plan.
+private const val RECORDING_START_TIMEOUT_MILLIS = 15 * 60_000L
+private const val RECORDING_STOP_TIMEOUT_MILLIS = 2 * 60_000L
 
 private fun detectHostPlatform(): HostPlatform {
 	val osName = System.getProperty("os.name").orEmpty().lowercase()

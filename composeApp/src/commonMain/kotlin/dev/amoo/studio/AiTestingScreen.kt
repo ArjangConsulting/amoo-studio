@@ -83,12 +83,12 @@ private val AmooArgumentRules = tokenRules("amoo-arguments") {
 	}
 }
 
-@Composable private fun ReadinessBanner(readiness: AgentReadiness, canChat: Boolean, onEvent: (StudioEvent) -> Unit) {
+@Composable private fun ReadinessBanner(readiness: SessionReadiness, canChat: Boolean, onEvent: (StudioEvent) -> Unit) {
 	val (message, action) = when (readiness) {
-		is AgentReadiness.Ready -> return
-		AgentReadiness.Unsupported -> if (canChat) return else "The connected Amoo version supports neither agent runs nor chat. Update Amoo." to null
-		AgentReadiness.NoDevice -> "Select a running device in Devices to let the agent drive it. Until then, messages go to chat." to "Open Devices"
-		is AgentReadiness.NoApp -> "Set the app's bundle or application ID in Devices so the agent can launch it on ${readiness.device.name}." to "Open Devices"
+		is SessionReadiness.Ready -> return
+		SessionReadiness.Unsupported -> if (canChat) return else "The connected Amoo version supports neither agent runs nor chat. Update Amoo." to null
+		SessionReadiness.NoDevice -> "Select a running device in Devices to let the agent drive it. Until then, messages go to chat." to "Open Devices"
+		is SessionReadiness.NoApp -> "Set the app's bundle or application ID in Devices so the agent can launch it on ${readiness.device.name}." to "Open Devices"
 	}
 	Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
 		Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -98,10 +98,10 @@ private val AmooArgumentRules = tokenRules("amoo-arguments") {
 	}
 }
 
-@Composable private fun EmptyAgentPrompt(readiness: AgentReadiness, onEvent: (StudioEvent) -> Unit) {
+@Composable private fun EmptyAgentPrompt(readiness: SessionReadiness, onEvent: (StudioEvent) -> Unit) {
 	Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
 		Text(
-			if (readiness is AgentReadiness.Ready) "Tell the agent what to test. It drives ${readiness.device.name}, records a session, and can turn it into a native test."
+			if (readiness is SessionReadiness.Ready) "Tell the agent what to test. It drives ${readiness.device.name}, records a session, and can turn it into a native test."
 			else "Ask Amoo to explore, explain, or turn an idea into test steps.",
 			style = MaterialTheme.typography.titleMedium,
 		)
@@ -113,7 +113,7 @@ private val AmooArgumentRules = tokenRules("amoo-arguments") {
 	}
 }
 
-@Composable private fun Composer(state: StudioState, hasProvider: Boolean, readiness: AgentReadiness, canChat: Boolean, onEvent: (StudioEvent) -> Unit) {
+@Composable private fun Composer(state: StudioState, hasProvider: Boolean, readiness: SessionReadiness, canChat: Boolean, onEvent: (StudioEvent) -> Unit) {
 	val active = state.agentRunActive
 	OutlinedTextField(
 		value = state.chat.input,
@@ -132,8 +132,8 @@ private val AmooArgumentRules = tokenRules("amoo-arguments") {
 				Button({ onEvent(StudioEvent.SteerAgentRun) }, enabled = state.chat.input.isNotBlank()) { Text("Send guidance") }
 			}
 			state.chat.operation == ChatOperation.Sending -> OutlinedButton({ onEvent(StudioEvent.CancelChat) }) { Text("Cancel") }
-			readiness is AgentReadiness.Ready -> Button({ onEvent(StudioEvent.SendChat) }, enabled = hasProvider && state.chat.input.isNotBlank()) { Text("Start agent run") }
-			else -> Button({ onEvent(StudioEvent.SendChat) }, enabled = canChat && hasProvider && state.chat.input.isNotBlank() && readiness !is AgentReadiness.NoApp) { Text("Send") }
+			readiness is SessionReadiness.Ready -> Button({ onEvent(StudioEvent.SendChat) }, enabled = hasProvider && state.chat.input.isNotBlank()) { Text("Start agent run") }
+			else -> Button({ onEvent(StudioEvent.SendChat) }, enabled = canChat && hasProvider && state.chat.input.isNotBlank() && readiness !is SessionReadiness.NoApp) { Text("Send") }
 		}
 	}
 }

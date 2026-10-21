@@ -38,6 +38,7 @@ Current methods:
 | `tools.catalog` | The console and plan vocabulary (`tools.catalog` capability) |
 | `repl.complete` | Complete a console line, including on-screen elements (`repl.complete`) |
 | `repl.validate` | Diagnostics for a console line (`repl.validate`) |
+| `repl.recording` | Record console commands into a session and generate a test from it |
 | `agent.start` / `agent.events` / `agent.approve` / `agent.continue` / `agent.cancel` | Provider-backed agent runs (`agent.runs`) |
 | `tests.generate` | Generated native test source with a source map (`tests.generate`) |
 
@@ -110,6 +111,30 @@ console grammar, "Add to test plan", and the plan editor. Older Amoo builds keep
   Console entries show the screenshot as a thumbnail that pins into the device pane, with the
   gesture drawn over it.
 
+## Console recording
+
+Console commands are not recorded by default. When Amoo advertises `repl.recording`, the console
+offers **Record**, which needs a selected running device and an app ID, from Devices or the open
+test.
+
+- **Start.** `repl.startRecording {deviceId, platform, appId, buildPath?}` starts a session that
+  launches the app fresh. It can boot the device or build the companion first, so Studio waits up
+  to 15 minutes, using `ProcessRpcClient.call`'s per-call `timeoutMs`.
+- **Record.** While recording, `repl.execute` results carry `actionIndex` and `sessionId`. Studio
+  labels each entry with its step and keeps its screenshot as `step-<actionIndex>`. Screenshots live
+  in the recording, so clearing the console history keeps them. Built-in commands aren't recorded,
+  and the console warns when the selected device is not the one being recorded.
+- **Stop.** `repl.stopRecording {deviceId}` ends the session, which writes `plan.json`.
+  **Generate test** then calls `tests.generate {sessionId}` with each step's screenshot, as for
+  agent runs.
+- **Failures.** A failed start clears the recording. A failed stop keeps it recording, so Stop can be
+  retried.
+- **Disconnects.** If Amoo exits while recording, it ends the session on shutdown. Studio marks the
+  recording stopped, and its steps can still be generated.
+
+A device records one session at a time, so a console recording and an agent run refuse each
+other's device.
+
 ## Live device view
 
 The device pane mirrors the selected running device while Console or AI testing is on screen. Studio
@@ -174,8 +199,8 @@ When the run ends, its last assistant message joins the persisted conversation.
 
 ## Generated tests
 
-`tests.generate` is offered from a finished agent run (by session ID) and from the Tests editor
-(the authored test), replacing the save-only export when Amoo advertises it.
+`tests.generate` is offered from a finished agent run or console recording (by session ID) and
+from the Tests editor (the authored test), replacing the save-only export when Amoo advertises it.
 
 - **Request.** Studio sends the Devices project path for `amoo.md` discovery, plus the chosen UI
   toolkit, test name, and `allowIncomplete`.
@@ -186,8 +211,8 @@ When the run ends, its last assistant message joins the persisted conversation.
 - **Navigation.** Clicking a line number selects the operation that produced it.
 - **Warnings.** Plan warnings appear as diagnostics on their step's lines or on the inserted
   `XCTFail` line.
-- **Screenshots.** For agent runs, each operation `step-<n>` shows the screenshot of the
-  `toolResult` whose `actionIndex` is `n`.
+- **Screenshots.** Each operation `step-<n>` shows the screenshot of the step whose `actionIndex`
+  is `n`: an agent run's `toolResult`, or a recorded console command.
 - **Problems.** A returned problem replaces the source. An incomplete plan offers
   "Generate anyway".
 

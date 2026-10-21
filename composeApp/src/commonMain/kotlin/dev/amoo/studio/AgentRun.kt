@@ -170,24 +170,27 @@ fun AgentRunState.timeline(): List<AgentTimelineItem> {
 	return items
 }
 
-/** Whether a message in AI testing can start an agent run, and if not, why. */
-sealed interface AgentReadiness {
-	data class Ready(val device: StudioDevice, val appId: String) : AgentReadiness
-	/** The connected Amoo has no `agent.runs`; messages go to plain chat. */
-	data object Unsupported : AgentReadiness
-	/** No running device is selected; messages go to plain chat. */
-	data object NoDevice : AgentReadiness
+/** Whether Studio can start a recorded session on the selected device (an agent run or a console recording), and if not, why. */
+sealed interface SessionReadiness {
+	data class Ready(val device: StudioDevice, val appId: String) : SessionReadiness
+	/** The connected Amoo lacks the capability; AI testing falls back to plain chat. */
+	data object Unsupported : SessionReadiness
+	/** No running device is selected; AI testing falls back to plain chat. */
+	data object NoDevice : SessionReadiness
 	/** A device is selected but the app to launch is unknown. */
-	data class NoApp(val device: StudioDevice) : AgentReadiness
+	data class NoApp(val device: StudioDevice) : SessionReadiness
 }
 
 const val AGENT_RUNS_CAPABILITY = "agent.runs"
 
-fun StudioState.agentReadiness(): AgentReadiness {
-	if (!connection.supports(AGENT_RUNS_CAPABILITY)) return AgentReadiness.Unsupported
-	val device = devices.firstOrNull { it.id == selectedDeviceId && it.status == DeviceStatus.Running } ?: return AgentReadiness.NoDevice
+fun StudioState.agentReadiness(): SessionReadiness = sessionReadiness(AGENT_RUNS_CAPABILITY)
+
+/** A session needs [capability], a selected running device, and the app to launch, from Devices or the open test. */
+fun StudioState.sessionReadiness(capability: String): SessionReadiness {
+	if (!connection.supports(capability)) return SessionReadiness.Unsupported
+	val device = devices.firstOrNull { it.id == selectedDeviceId && it.status == DeviceStatus.Running } ?: return SessionReadiness.NoDevice
 	val appId = appId.trim().ifEmpty { test.requirements?.appId?.trim().orEmpty() }
-	return if (appId.isEmpty()) AgentReadiness.NoApp(device) else AgentReadiness.Ready(device, appId)
+	return if (appId.isEmpty()) SessionReadiness.NoApp(device) else SessionReadiness.Ready(device, appId)
 }
 
 /** True while a run is active, so the composer steers it instead of starting another. */

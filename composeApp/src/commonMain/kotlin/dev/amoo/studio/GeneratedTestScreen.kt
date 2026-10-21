@@ -31,7 +31,7 @@ import com.arjangconsulting.codeeditor.TextRange as EditorRange
 	if (generated == null) {
 		Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 			Text("Nothing generated yet.", style = MaterialTheme.typography.titleMedium)
-			Text("Generate a test from a finished agent run in AI testing, or from the test open in Tests.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			Text("Generate a test from a finished agent run in AI testing, a console recording, or the test open in Tests.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 			Button({ onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = state.connection.supports(TESTS_GENERATE_CAPABILITY)) { Text("Generate from ${state.test.name}") }
 		}
 		return
@@ -192,7 +192,7 @@ internal fun warningDiagnostics(generated: GeneratedTestState, source: Generated
 		Box(Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
 			if (pinned == null) {
 				Text(
-					if (generated.stepScreenshots.isEmpty()) "Screenshots appear here for tests generated from an agent run." else "No screenshot for this step.",
+					if (generated.stepScreenshots.isEmpty()) "Screenshots appear here for tests generated from an agent run or a console recording." else "No screenshot for this step.",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)

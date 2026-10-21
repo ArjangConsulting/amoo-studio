@@ -3,6 +3,9 @@ package dev.amoo.studio
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.onAllNodesWithText
@@ -39,6 +42,40 @@ class StudioScreensUiTest {
 		onNodeWithText("Show details").performClick()
 		onNodeWithText("Hide details").assertExists()
 		onNodeWithContentDescription("Resize panes").assertExists()
+	}
+
+	@Test
+	fun theConsoleRecordsCommandsAndGeneratesATestFromThem() = runComposeUiTest {
+		val events = mutableListOf<StudioEvent>()
+		var state by mutableStateOf(StudioState(
+			connection = ConnectionState.Ready("1", STUDIO_PROTOCOL_VERSION, listOf("repl.execute", REPL_RECORDING_CAPABILITY, TESTS_GENERATE_CAPABILITY)),
+			devices = listOf(device),
+			selectedDeviceId = device.id,
+			appId = "dev.app",
+		))
+		setContent { Host { ConsoleContent(state) { events += it } } }
+
+		onNodeWithText("Record").assertIsEnabled().performClick()
+		assertTrue(StudioEvent.StartConsoleRecording in events)
+
+		state = state.reduce(StudioEvent.StartConsoleRecording).reduce(StudioEvent.ConsoleRecordingStarted("s-1", 0))
+			.reduce(StudioEvent.ConsoleCommandFinished(ConsoleEntry("e1", "tap_element id=login", "Tapped", actionIndex = 0, sessionId = "s-1")))
+		onNodeWithText("Recording on iPhone 17 · 1 step").assertExists()
+		onNodeWithText("Recorded as step 1").assertExists()
+		onNodeWithText("Stop recording").performClick()
+		assertTrue(StudioEvent.StopConsoleRecording in events)
+
+		state = state.reduce(StudioEvent.StopConsoleRecording).reduce(StudioEvent.ConsoleRecordingStopped(1, "/plan.json", null))
+		onNodeWithText("Recorded 1 step on iPhone 17").assertExists()
+		onNodeWithText("Generate test").assertIsEnabled().performClick()
+		assertTrue(StudioEvent.GenerateConsoleTest in events)
+	}
+
+	@Test
+	fun theConsoleHidesRecordingFromAmooBuildsWithoutIt() = runComposeUiTest {
+		setContent { Host { ConsoleContent(StudioState(connection = ready, devices = listOf(device), selectedDeviceId = device.id, appId = "dev.app")) {} } }
+
+		onNodeWithText("Record").assertDoesNotExist()
 	}
 
 	@Test

@@ -98,11 +98,11 @@ class AgentAndGenerationTest {
 	fun `messages start agent runs only with a running device and a known app`() {
 		val ready = StudioState(connection = ConnectionState.Ready("1", 1, listOf(AGENT_RUNS_CAPABILITY)), devices = listOf(device), selectedDeviceId = "sim-1", appId = "dev.app")
 
-		assertEquals(AgentReadiness.Ready(device, "dev.app"), ready.agentReadiness())
-		assertEquals(AgentReadiness.NoApp(device), ready.copy(appId = "").agentReadiness())
-		assertEquals(AgentReadiness.Ready(device, "from.test"), ready.copy(appId = "", test = AmooTest(requirements = TestRequirements(appId = "from.test"))).agentReadiness())
-		assertEquals(AgentReadiness.NoDevice, ready.copy(devices = listOf(device.copy(status = DeviceStatus.Available))).agentReadiness())
-		assertEquals(AgentReadiness.Unsupported, ready.copy(connection = ConnectionState.Ready("1", 1, emptyList())).agentReadiness())
+		assertEquals(SessionReadiness.Ready(device, "dev.app"), ready.agentReadiness())
+		assertEquals(SessionReadiness.NoApp(device), ready.copy(appId = "").agentReadiness())
+		assertEquals(SessionReadiness.Ready(device, "from.test"), ready.copy(appId = "", test = AmooTest(requirements = TestRequirements(appId = "from.test"))).agentReadiness())
+		assertEquals(SessionReadiness.NoDevice, ready.copy(devices = listOf(device.copy(status = DeviceStatus.Available))).agentReadiness())
+		assertEquals(SessionReadiness.Unsupported, ready.copy(connection = ConnectionState.Ready("1", 1, emptyList())).agentReadiness())
 	}
 
 	@Test

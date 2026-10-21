@@ -46,7 +46,7 @@ if (useLocalCredentialKeychain) {
 	includeBuild(localCredentialKeychain) {
 		// The library's Gradle project is :core but it publishes as credential-keychain-kotlin.
 		dependencySubstitution {
-			substitute(module("com.maniramezan:credential-keychain-kotlin")).using(project(":core"))
+			substitute(module("io.github.maniramezan:credential-keychain-kotlin")).using(project(":core"))
 		}
 	}
 }

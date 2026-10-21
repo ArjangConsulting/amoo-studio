@@ -25,7 +25,11 @@ import androidx.compose.ui.unit.dp
 			if (state.testExecution is TestExecution.Running) OutlinedButton({ onEvent(StudioEvent.CancelTestRun) }) { Text("Cancel run") }
 			else Button({ onEvent(StudioEvent.RunTest) }, enabled = canRun) { Text("Run test") }
 			val canExport = plan?.toolOperations?.isNotEmpty() == true && state.connection.supports("tests.export") && !state.testExportInProgress
-			OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
+			if (state.connection.supports(TESTS_GENERATE_CAPABILITY)) {
+				OutlinedButton({ onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = plan?.toolOperations?.isNotEmpty() == true) { Text("Generate test") }
+			} else {
+				OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
+			}
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)

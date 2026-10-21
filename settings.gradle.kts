@@ -21,8 +21,12 @@ dependencyResolutionManagement {
 	}
 }
 
-if (providers.gradleProperty("useLocalKmpComponents").orNull.toBoolean()) {
-	val localKmpComponents = file("../KMPComponents")
+// KMPComponents (components and code-editor) resolves from Maven Central by default. A sibling
+// checkout is included automatically when present; -PuseLocalKmpComponents=true|false overrides that.
+val localKmpComponents = file("../KMPComponents")
+val useLocalKmpComponents = providers.gradleProperty("useLocalKmpComponents").orNull?.toBoolean()
+	?: localKmpComponents.resolve("settings.gradle.kts").isFile
+if (useLocalKmpComponents) {
 	require(localKmpComponents.resolve("settings.gradle.kts").isFile) {
 		"useLocalKmpComponents requires KMPComponents to be checked out next to amoo-studio"
 	}

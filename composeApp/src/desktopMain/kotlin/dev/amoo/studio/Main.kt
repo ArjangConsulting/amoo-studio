@@ -83,6 +83,26 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 	apiKey.takeIf { !it.isBlank && connection.supports(PROVIDER_API_KEY_CAPABILITY) },
 )
 @Serializable private data class ChatRequest(val provider: ProviderRequest, val messages: List<ChatMessage>, val activeTest: AmooTest)
+@Serializable private data class AgentStartRequest(
+	val provider: ProviderRequest,
+	val messages: List<ChatMessage>,
+	val activeTest: AmooTest,
+	val deviceId: String,
+	val platform: String,
+	val appId: String,
+	val buildPath: String? = null,
+)
+@Serializable private data class AgentStartResult(val runId: String)
+@Serializable private data class GenerateRequest(
+	val sessionId: String? = null,
+	val test: AmooTest? = null,
+	val uiToolkit: UiToolkit? = null,
+	val testName: String? = null,
+	val allowIncomplete: Boolean = false,
+	val projectPath: String? = null,
+)
+@Serializable private data class GenerateResult(val generated: GeneratedSource? = null, val problem: GenerationProblem? = null, val test: AmooTest)
+@Serializable private data class AgentEventsResult(val state: AgentRunStatus, val events: List<AgentEvent>, val nextSeq: Int)
 @Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
 @Serializable private data class ProviderCheckResult(val message: String)
 @Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?, val platform: String? = null, val captureScreenshot: Boolean = true)
@@ -120,6 +140,36 @@ private class StudioController(
 		workbenchSplit = preferences.getFloat(WORKBENCH_SPLIT_KEY, DEFAULT_WORKBENCH_SPLIT),
 	))
 	val screenshotLoader: ScreenshotLoader = DesktopScreenshotLoader()
+
+	/**
+	 * Amoo's console completion and validation. Returns null when Amoo cannot answer, so the editor's
+	 * service falls back to the local grammar; cancellation propagates because the editor cancels stale requests.
+	 */
+	val replAssist: ReplAssist = object : ReplAssist {
+		override suspend fun complete(line: String, cursor: Int): ReplCompletion? = askAmoo(REPL_COMPLETE_CAPABILITY, "repl.complete") {
+			put("line", line)
+			put("cursor", cursor)
+			selectedDevice()?.let { device -> put("selectedDeviceId", device.id); put("platform", device.platform.name.lowercase()) }
+		}
+
+		override suspend fun validate(line: String): List<ReplDiagnostic>? =
+			askAmoo<ValidationResult>(REPL_VALIDATE_CAPABILITY, "repl.validate") { put("line", line) }?.diagnostics
+	}
+
+	@Serializable private data class ValidationResult(val diagnostics: List<ReplDiagnostic>)
+
+	private fun selectedDevice(): StudioDevice? = state.value.let { snapshot -> snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId } }
+
+	private suspend inline fun <reified T> askAmoo(capability: String, method: String, crossinline params: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): T? {
+		if (!state.value.connection.supports(capability)) return null
+		return try {
+			json.decodeFromJsonElement<T>(client.call(method, buildJsonObject { params() }))
+		} catch (cancelled: kotlinx.coroutines.CancellationException) {
+			throw cancelled
+		} catch (failure: Exception) {
+			null
+		}
+	}
 	private val mirror = DeviceMirror(scope, AmooStreamLauncher(::locateAmoo), onEvent = { event ->
 		withContext(Dispatchers.Main) { state.value = state.value.reduce(event) }
 	})
@@ -160,6 +210,7 @@ private class StudioController(
 		}
 		when (decoded) {
 			is AmooNotification.TestProgress -> pushedRunStatuses.update { it + (decoded.status.runId to decoded.status) }
+			is AmooNotification.AgentEventNotice -> onAgentEvent(decoded.event)
 			null -> Unit
 		}
 	}
@@ -222,11 +273,18 @@ private class StudioController(
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
 			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
 			StudioEvent.ReinstallAndRun -> reinstallAndRun()
-			is StudioEvent.ResolveApproval -> if (event.approved) when (approvedAction) {
-				ApprovedAction.ResetAppData -> resetAppData()
-				ApprovedAction.InstallAmoo -> installAmoo()
+			is StudioEvent.ResolveApproval -> when (approvedAction) {
+				ApprovedAction.ResetAppData -> if (event.approved) resetAppData()
+				ApprovedAction.InstallAmoo -> if (event.approved) installAmoo()
+				// A decline is an answer too: the agent is told and continues another way.
+				is ApprovedAction.AgentTool -> answerAgentApproval(approvedAction, event.approved)
 				null -> Unit
 			}
+			StudioEvent.CancelAgentRun -> cancelAgentRun()
+			is StudioEvent.GenerateTest, is StudioEvent.RegenerateTest -> generateTest()
+			StudioEvent.CopyGeneratedTest -> state.value.generatedTest?.generated?.let { copyToClipboard(it.source, "Generated test copied") }
+			StudioEvent.SaveGeneratedTest -> saveGeneratedTest()
+			StudioEvent.SteerAgentRun -> steerAgentRun()
 			else -> Unit
 		}
 	}
@@ -414,6 +472,15 @@ private class StudioController(
 	}
 
 	private fun sendChat() {
+		val readiness = state.value.agentReadiness()
+		if (readiness is AgentReadiness.NoApp) {
+			state.value = state.value.copy(notice = "Set the app's bundle or application ID in Devices so the agent can launch ${readiness.device.name}'s app")
+			return
+		}
+		if (readiness is AgentReadiness.Ready) {
+			startAgentRun(readiness)
+			return
+		}
 		if (!requireCapability("chat.send")) return
 		val snapshot = state.value
 		val input = snapshot.chat.input.trim()
@@ -438,6 +505,151 @@ private class StudioController(
 				}
 			chatJob = null
 		}
+	}
+
+	// MARK: Agent runs
+
+	/** Events that arrived before `agent.start` returned their run id. */
+	private val earlyAgentEvents = mutableMapOf<String, MutableList<AgentEvent>>()
+	private var agentWatchJob: Job? = null
+	private var lastAgentEventNanos = 0L
+
+	private fun startAgentRun(readiness: AgentReadiness.Ready) {
+		val snapshot = state.value
+		val input = snapshot.chat.input.trim()
+		if (input.isEmpty() || snapshot.agentRunActive) return
+		val provider = snapshot.providers.firstOrNull { it.id == snapshot.selectedProviderId } ?: run {
+			state.value = state.value.copy(notice = "Choose an AI provider before starting an agent run")
+			return
+		}
+		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
+			state.value = state.value.copy(notice = problem)
+			return
+		}
+		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
+		val request = AgentStartRequest(
+			provider = provider.toRequest(snapshot.connection),
+			messages = snapshot.chat.messages + userMessage,
+			activeTest = snapshot.test,
+			deviceId = readiness.device.id,
+			platform = readiness.device.platform.name.lowercase(),
+			appId = readiness.appId,
+			buildPath = snapshot.lastBuildArtifact,
+		)
+		chatJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<AgentStartResult>(client.call("agent.start", json.encodeToJsonElement(request))) }
+				.onSuccess { started ->
+					state.value = state.value.reduce(StudioEvent.AgentRunStarted(started.runId, userMessage))
+					persistChatMessages()
+					earlyAgentEvents.remove(started.runId)?.sortedBy { it.seq }?.forEach(::onAgentEvent)
+					earlyAgentEvents.clear()
+					watchAgentRun(started.runId)
+				}
+				.onFailure { state.value = state.value.reduce(StudioEvent.AgentRunFailed("Agent run failed to start: ${it.message}")) }
+			chatJob = null
+		}
+	}
+
+	private fun onAgentEvent(event: AgentEvent) {
+		val run = state.value.agentRun
+		if (run?.runId != event.runId) {
+			if (event.kind != AgentEventKind.AssistantDelta) earlyAgentEvents.getOrPut(event.runId) { mutableListOf() }.takeIf { it.size < 500 }?.add(event)
+			return
+		}
+		lastAgentEventNanos = System.nanoTime()
+		val wasTerminal = run.status.isTerminal
+		state.value = state.value.reduce(StudioEvent.AgentEventReceived(event))
+		val updated = state.value.agentRun ?: return
+		if (updated.gap) scope.launch { replayAgentEvents(updated.runId) }
+		if (!wasTerminal && updated.status.isTerminal) persistChatMessages()
+	}
+
+	/** Replays missed events after a gap, and every few seconds of silence in case a notification was dropped. */
+	private fun watchAgentRun(runId: String) {
+		agentWatchJob?.cancel()
+		lastAgentEventNanos = System.nanoTime()
+		agentWatchJob = scope.launch {
+			while (state.value.agentRun?.let { it.runId == runId && !it.status.isTerminal } == true) {
+				delay(AGENT_HEARTBEAT_MILLIS)
+				if (System.nanoTime() - lastAgentEventNanos >= AGENT_HEARTBEAT_MILLIS * 1_000_000) replayAgentEvents(runId)
+			}
+		}
+	}
+
+	private suspend fun replayAgentEvents(runId: String) {
+		val after = (state.value.agentRun?.takeIf { it.runId == runId }?.nextSeq ?: return) - 1
+		runCatching { json.decodeFromJsonElement<AgentEventsResult>(client.call("agent.events", buildJsonObject { put("runId", runId); put("after", after) })) }
+			.onSuccess { result ->
+				lastAgentEventNanos = System.nanoTime()
+				val wasTerminal = state.value.agentRun?.status?.isTerminal == true
+				state.value = state.value.reduce(StudioEvent.AgentEventsReplayed(runId, result.events, result.state, result.nextSeq))
+				if (!wasTerminal && state.value.agentRun?.status?.isTerminal == true) persistChatMessages()
+			}
+	}
+
+	private fun answerAgentApproval(action: ApprovedAction.AgentTool, approved: Boolean) = scope.launch {
+		runCatching { client.call("agent.approve", buildJsonObject { put("runId", action.runId); put("callId", action.callId); put("approved", approved) }) }
+			.onFailure { state.value = state.value.copy(notice = "Could not answer the approval: ${it.message}") }
+	}
+
+	private fun cancelAgentRun() {
+		val runId = state.value.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
+		scope.launch {
+			runCatching { client.call("agent.cancel", buildJsonObject { put("runId", runId) }) }
+				.onFailure { state.value = state.value.copy(notice = "Could not stop the agent: ${it.message}") }
+		}
+	}
+
+	private fun steerAgentRun() {
+		val snapshot = state.value
+		val runId = snapshot.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
+		val text = snapshot.chat.input.trim().takeIf(String::isNotEmpty) ?: return
+		val message = ChatMessage("user-${System.nanoTime()}", ChatRole.User, text)
+		scope.launch {
+			runCatching { client.call("agent.continue", buildJsonObject { put("runId", runId); put("message", text) }) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.AgentSteered(message)); persistChatMessages() }
+				.onFailure { state.value = state.value.copy(notice = "Could not send guidance: ${it.message}") }
+		}
+	}
+
+	// MARK: Test generation
+
+	private var generateJob: Job? = null
+
+	private fun generateTest() {
+		val snapshot = state.value
+		val generated = snapshot.generatedTest ?: return
+		if (!snapshot.connection.supports(TESTS_GENERATE_CAPABILITY)) {
+			state.value = state.value.reduce(StudioEvent.TestGenerationFailed("The connected Amoo version cannot generate tests. Update Amoo."))
+			return
+		}
+		val request = GenerateRequest(
+			sessionId = (generated.source as? GenerationSource.Session)?.sessionId,
+			test = snapshot.test.takeIf { generated.source == GenerationSource.AuthoredTest },
+			uiToolkit = generated.uiToolkit,
+			testName = generated.testName.trim().ifEmpty { null },
+			allowIncomplete = generated.allowIncomplete,
+			projectPath = snapshot.projectPath.ifBlank { null },
+		)
+		generateJob?.cancel()
+		generateJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<GenerateResult>(client.call("tests.generate", json.encodeToJsonElement(request))) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.TestGenerated(it.generated, it.problem, it.test)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.TestGenerationFailed("Test generation failed: ${it.message}")) }
+		}
+	}
+
+	private fun saveGeneratedTest() {
+		val generated = state.value.generatedTest?.generated ?: return
+		val file = chooseFile(FileDialog.SAVE, "Save generated test", generated.fileName) ?: return
+		runCatching { file.writeText(generated.source) }
+			.onSuccess { state.value = state.value.copy(notice = "Saved ${file.name}") }
+			.onFailure { state.value = state.value.copy(notice = "Could not write file: ${it.message}") }
+	}
+
+	private fun copyToClipboard(text: String, notice: String) {
+		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+		state.value = state.value.copy(notice = notice)
 	}
 
 	private fun checkProvider(id: String) {
@@ -655,11 +867,12 @@ private class StudioController(
 		state.map { it.workbenchSplit }.distinctUntilChanged().drop(1).debounce(500).collect { preferences.putFloat(WORKBENCH_SPLIT_KEY, it) }
 	}
 
-	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); mirror.close(); client.close() }
+	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); agentWatchJob?.cancel(); generateJob?.cancel(); mirror.close(); client.close() }
 }
 
 private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
 private const val WORKBENCH_SPLIT_KEY = "workbenchSplit"
+private const val AGENT_HEARTBEAT_MILLIS = 5_000L
 
 private fun detectHostPlatform(): HostPlatform {
 	val osName = System.getProperty("os.name").orEmpty().lowercase()
@@ -745,7 +958,7 @@ fun main() = application {
 		LaunchedEffect(Unit) {
 			installDockIcon()
 		}
-		CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader) {
+		CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader, LocalReplAssist provides controller.replAssist) {
 			AmooStudioApp(state, controller::onEvent)
 		}
 	}

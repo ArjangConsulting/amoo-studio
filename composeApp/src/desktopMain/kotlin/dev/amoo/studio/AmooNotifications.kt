@@ -19,6 +19,7 @@ internal const val REPL_VALIDATE_CAPABILITY = "repl.validate"
 /** A notification pushed by `amoo studio serve`, decoded into Studio's boundary model. */
 internal sealed interface AmooNotification {
 	data class TestProgress(val status: TestRunStatus) : AmooNotification
+	data class AgentEventNotice(val event: AgentEvent) : AmooNotification
 }
 
 /**
@@ -27,5 +28,6 @@ internal sealed interface AmooNotification {
  */
 internal fun Json.decodeAmooNotification(notification: RpcNotification): AmooNotification? = when (notification.method) {
 	"tests.progress" -> AmooNotification.TestProgress(decodeFromJsonElement<TestRunStatus>(notification.params))
+	"agent.event" -> AmooNotification.AgentEventNotice(decodeFromJsonElement<AgentEvent>(notification.params))
 	else -> null
 }

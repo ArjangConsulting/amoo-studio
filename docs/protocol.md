@@ -38,12 +38,15 @@ Current methods:
 | `tools.catalog` | The console and plan vocabulary (`tools.catalog` capability) |
 | `repl.complete` | Complete a console line, including on-screen elements (`repl.complete`) |
 | `repl.validate` | Diagnostics for a console line (`repl.validate`) |
+| `agent.start` / `agent.events` / `agent.approve` / `agent.continue` / `agent.cancel` | Provider-backed agent runs (`agent.runs`) |
+| `tests.generate` | Generated native test source with a source map (`tests.generate`) |
 
 Notifications pushed by Amoo:
 
 | Method | Capability | Params |
 | --- | --- | --- |
 | `tests.progress` | `tests.progress` | The same status object `tests.status` returns, sent whenever an asynchronous run changes |
+| `agent.event` | `agent.runs` | One numbered step of an agent run |
 
 `chat.send` returns `{ "message": "..." }`. Provider profiles contain endpoint/model configuration,
 an API-key environment-variable name, and an optional `apiKey`. Studio sends `apiKey` only when Amoo
@@ -128,4 +131,63 @@ the host without a device lease, so it can watch a device the console or an agen
   from 1 to 30 seconds, reset after frames arrive.
 - **Lifecycle.** The process is destroyed when the section, the device, or the pause state changes,
   and when Studio closes.
+
+## Console editor
+
+The console line is a single-line `CodeEditor` from KMPComponents' `code-editor` module.
+`amooCommandRules` highlights it from the loaded catalog. Its `ConsoleLanguageService` asks Amoo
+through `ReplAssist` (`repl.complete` and `repl.validate`, with the selected device), so completion
+can offer elements on that device's screen.
+
+- **Fallback.** A null answer, from an older Amoo or a failed call, falls back to the local
+  `ReplGrammar`.
+- **Stale requests.** Cancellation propagates, so the editor can drop stale requests.
+- **History.** History entries render with `CodeSnippet`, and structured results expand into
+  pretty-printed JSON.
+
+## Agent runs
+
+With `agent.runs`, a running selected device, and a known app ID (from Devices, or the active test's
+requirements), sending a message in AI testing calls `agent.start` instead of `chat.send`.
+
+**What Studio sends.** `agent.start` carries the provider profile (with its API key under
+`providers.apiKey`), the conversation, the active test, the device and its platform, the app ID,
+and the last build artifact.
+
+**Following the run.** Studio follows the run through pushed `agent.event` notifications:
+
+- **Early events.** Events that arrive before `agent.start` returns are buffered by run ID.
+- **Ordering.** `AgentRunState` applies numbered events in order. A gap triggers an
+  `agent.events {runId, after}` replay, and a 5-second heartbeat replays when no event arrived.
+- **Streamed text.** `assistantDelta` text streams into the timeline and is replaced by
+  `assistantMessage`.
+
+**Approvals.** A destructive tool raises Studio's approval dialog through
+`ApprovedAction.AgentTool`, and the timeline shows the same choice inline. Both answers, including
+a decline, go to `agent.approve`.
+
+**Steering and stopping.** While a run is active, the composer sends guidance with
+`agent.continue` and stops the run with `agent.cancel`.
+
+**Timeline.** Tool results show their step screenshot and tap point, and pin into the device pane.
+When the run ends, its last assistant message joins the persisted conversation.
+
+## Generated tests
+
+`tests.generate` is offered from a finished agent run (by session ID) and from the Tests editor
+(the authored test), replacing the save-only export when Amoo advertises it.
+
+- **Request.** Studio sends the Devices project path for `amoo.md` discovery, plus the chosen UI
+  toolkit, test name, and `allowIncomplete`.
+- **Layout.** The Generated test section shows the plan's operations with their warnings, and the
+  read-only source in a `CodeEditor`.
+- **Highlighting.** The selected operation's `sourceMap` lines are highlighted and revealed, and
+  steps whose warnings are serious stay tinted.
+- **Navigation.** Clicking a line number selects the operation that produced it.
+- **Warnings.** Plan warnings appear as diagnostics on their step's lines or on the inserted
+  `XCTFail` line.
+- **Screenshots.** For agent runs, each operation `step-<n>` shows the screenshot of the
+  `toolResult` whose `actionIndex` is `n`.
+- **Problems.** A returned problem replaces the source. An incomplete plan offers
+  "Generate anyway".
 

@@ -44,6 +44,10 @@ data class StudioState(
 	val testExportInProgress: Boolean = false,
 	val amooInstall: AmooInstallState = AmooInstallState.Idle,
 	val mirror: DeviceMirrorState = DeviceMirrorState(),
+	/** The current or most recent agent run in AI testing. */
+	val agentRun: AgentRunState? = null,
+	/** The most recent generated test, shown in the Generated test section. */
+	val generatedTest: GeneratedTestState? = null,
 	/** Fraction of the workbench width given to the console or agent feed; the device pane gets the rest. */
 	val workbenchSplit: Float = DEFAULT_WORKBENCH_SPLIT,
 )
@@ -71,7 +75,7 @@ enum class HostPlatform(val label: String) {
 	Unsupported("Unsupported host"),
 }
 
-enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Console("Console"), Reports("Reports"), Settings("Settings") }
+enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Console("Console"), GeneratedTest("Generated test"), Reports("Reports"), Settings("Settings") }
 
 @Serializable
 data class AmooTest(
@@ -93,6 +97,8 @@ data class CompiledToolPlan(
 	val compilerVersion: String,
 	val operations: List<String> = emptyList(),
 	val toolOperations: List<ToolOperation> = emptyList(),
+	/** Notes from compiling a recorded session; written by Amoo, preserved by Studio. */
+	val warnings: List<PlanWarning> = emptyList(),
 )
 
 @Serializable data class ToolOperation(val id: String, val tool: String, val arguments: Map<String, String> = emptyMap())
@@ -226,7 +232,12 @@ data class StudioDevice(
 data class CreateDeviceState(val platform: TestPlatform, val name: String = "", val runtime: String = "", val deviceType: String = "")
 sealed interface DeviceOperation { data object Idle : DeviceOperation; data class Working(val message: String) : DeviceOperation }
 data class PendingApproval(val title: String, val message: String, val action: ApprovedAction, val confirmLabel: String = "Confirm")
-sealed interface ApprovedAction { data object ResetAppData : ApprovedAction; data object InstallAmoo : ApprovedAction }
+sealed interface ApprovedAction {
+	data object ResetAppData : ApprovedAction
+	data object InstallAmoo : ApprovedAction
+	/** An agent's destructive tool call waiting for the user. */
+	data class AgentTool(val runId: String, val callId: String) : ApprovedAction
+}
 
 const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
 const val AMOO_HOMEBREW_FORMULA = "amoo"
@@ -339,6 +350,22 @@ sealed interface StudioEvent {
 	data class PinScreenshot(val pinned: PinnedScreenshot) : StudioEvent
 	data object ReturnToLiveMirror : StudioEvent
 	data class ChangeWorkbenchSplit(val fraction: Float) : StudioEvent
+	data class AgentRunStarted(val runId: String, val request: ChatMessage) : StudioEvent
+	data class AgentEventReceived(val event: AgentEvent) : StudioEvent
+	data class AgentEventsReplayed(val runId: String, val events: List<AgentEvent>, val status: AgentRunStatus, val nextSeq: Int) : StudioEvent
+	data class AgentRunFailed(val message: String) : StudioEvent
+	data object CancelAgentRun : StudioEvent
+	data object SteerAgentRun : StudioEvent
+	data class AgentSteered(val message: ChatMessage) : StudioEvent
+	data object DismissAgentRun : StudioEvent
+	data class GenerateTest(val source: GenerationSource, val stepScreenshots: Map<String, PinnedScreenshot> = emptyMap()) : StudioEvent
+	data class TestGenerated(val generated: GeneratedSource?, val problem: GenerationProblem?, val test: AmooTest) : StudioEvent
+	data class TestGenerationFailed(val message: String) : StudioEvent
+	data class SelectGeneratedOperation(val operationId: String?) : StudioEvent
+	data class ChangeGeneratedTestOptions(val uiToolkit: UiToolkit? = null, val testName: String? = null) : StudioEvent
+	data class RegenerateTest(val allowIncomplete: Boolean) : StudioEvent
+	data object SaveGeneratedTest : StudioEvent
+	data object CopyGeneratedTest : StudioEvent
 }
 
 fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
@@ -486,6 +513,68 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.PinScreenshot -> copy(mirror = mirror.copy(pinned = event.pinned))
 	StudioEvent.ReturnToLiveMirror -> copy(mirror = mirror.copy(pinned = null))
 	is StudioEvent.ChangeWorkbenchSplit -> copy(workbenchSplit = event.fraction.coerceIn(MIN_WORKBENCH_SPLIT, MAX_WORKBENCH_SPLIT))
+	is StudioEvent.AgentRunStarted -> copy(
+		agentRun = AgentRunState(event.runId, event.request.content),
+		chat = chat.copy(input = "", messages = chat.messages + event.request, lastError = null),
+		notice = null,
+	)
+	is StudioEvent.AgentEventReceived -> applyingAgentRun(agentRun?.applying(event.event))
+	is StudioEvent.AgentEventsReplayed -> applyingAgentRun(agentRun?.takeIf { it.runId == event.runId }?.replaying(event.events, event.status, event.nextSeq))
+	is StudioEvent.AgentRunFailed -> copy(chat = chat.copy(lastError = event.message), notice = event.message)
+	StudioEvent.CancelAgentRun, StudioEvent.SteerAgentRun -> this
+	is StudioEvent.AgentSteered -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message))
+	StudioEvent.DismissAgentRun -> if (agentRun?.status?.isTerminal != false) copy(agentRun = null) else this
+	is StudioEvent.GenerateTest -> copy(
+		section = StudioSection.GeneratedTest,
+		generatedTest = GeneratedTestState(
+			event.source,
+			stepScreenshots = event.stepScreenshots,
+			testName = (event.source as? GenerationSource.Session)?.title ?: test.name,
+		),
+	)
+	is StudioEvent.TestGenerated -> copy(generatedTest = generatedTest?.copy(
+		loading = false,
+		generated = event.generated,
+		problem = event.problem,
+		test = event.test,
+		selectedOperationId = generatedTest.selectedOperationId?.takeIf { id -> event.test.compiledPlan?.toolOperations?.any { it.id == id } == true }
+			?: event.test.compiledPlan?.toolOperations?.firstOrNull()?.id,
+	))
+	is StudioEvent.TestGenerationFailed -> copy(generatedTest = generatedTest?.copy(loading = false), notice = event.message)
+	is StudioEvent.SelectGeneratedOperation -> copy(generatedTest = generatedTest?.copy(selectedOperationId = event.operationId))
+	is StudioEvent.ChangeGeneratedTestOptions -> copy(generatedTest = generatedTest?.copy(
+		uiToolkit = event.uiToolkit ?: generatedTest.uiToolkit,
+		testName = event.testName ?: generatedTest.testName,
+	))
+	is StudioEvent.RegenerateTest -> copy(generatedTest = generatedTest?.copy(loading = true, allowIncomplete = event.allowIncomplete))
+	StudioEvent.SaveGeneratedTest, StudioEvent.CopyGeneratedTest -> this
+}
+
+/**
+ * Updates the agent run and what follows from it: an approval prompt while a destructive call waits, and the
+ * run's summary added to the conversation when it ends.
+ */
+private fun StudioState.applyingAgentRun(updated: AgentRunState?): StudioState {
+	val previous = agentRun
+	if (updated == null || updated == previous) return this
+	var next = copy(agentRun = updated)
+	val waiting = updated.pendingApprovalCallId
+	if (waiting != null && waiting != previous?.pendingApprovalCallId) {
+		val call = updated.events.lastOrNull { it.kind == AgentEventKind.ApprovalRequired && it.callId == waiting }
+		val arguments = call?.arguments.orEmpty().entries.joinToString("\n") { "${it.key} = ${it.value}" }
+		next = next.copy(pendingApproval = PendingApproval(
+			"Allow ${call?.tool ?: "this action"}?",
+			listOfNotNull(call?.text, arguments.takeIf(String::isNotEmpty)).joinToString("\n\n"),
+			ApprovedAction.AgentTool(updated.runId, waiting),
+			confirmLabel = "Allow",
+		))
+	} else if (waiting == null && (pendingApproval?.action as? ApprovedAction.AgentTool)?.runId == updated.runId) {
+		next = next.copy(pendingApproval = null)
+	}
+	if (updated.status.isTerminal && previous?.status?.isTerminal != true) {
+		updated.summary?.let { summary -> next = next.copy(chat = next.chat.copy(messages = next.chat.messages + ChatMessage("agent-${updated.runId}", ChatRole.Assistant, summary))) }
+	}
+	return next
 }
 
 const val MIN_WORKBENCH_SPLIT = 0.3f

@@ -34,6 +34,7 @@ kotlin {
 				implementation(compose.components.resources)
 				implementation(libs.compose.ui)
 				implementation(libs.kmp.components)
+				implementation(libs.kmp.code.editor)
 				implementation(libs.coroutines.core)
 				implementation(libs.kotlinx.serialization.json)
 			}
@@ -47,7 +48,10 @@ kotlin {
 			}
 		}
 		named("desktopTest") {
-			dependencies { implementation(kotlin("test")) }
+			dependencies {
+				implementation(kotlin("test"))
+				implementation(libs.compose.ui.test)
+			}
 		}
 	}
 }

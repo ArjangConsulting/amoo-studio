@@ -7,11 +7,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.foundation.BorderStroke
+import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditor
+import io.github.maniramezan.kmpcomponents.codeeditor.CodeSnippet
+import io.github.maniramezan.kmpcomponents.codeeditor.JsonRules
+import io.github.maniramezan.kmpcomponents.codeeditor.TokenRules
+import androidx.compose.ui.text.style.TextOverflow
+import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditorLabels
+import io.github.maniramezan.kmpcomponents.codeeditor.CodeEditorOptions
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -25,6 +28,7 @@ import androidx.compose.ui.unit.dp
 }
 
 @Composable private fun ConsolePanel(state: StudioState, onEvent: (StudioEvent) -> Unit) {
+	val rules = remember(state.toolCatalog) { amooCommandRules(state.toolCatalog) }
 	val canExecute = state.connection.supports("repl.execute")
 	val parse = state.consoleParse()
 	val validationError = parse.diagnostics.firstOrNull { it.severity == ReplSeverity.Error }?.message
@@ -39,30 +43,14 @@ import androidx.compose.ui.unit.dp
 		if (!canExecute) Text("The connected Amoo version does not advertise repl.execute. Update Amoo to enable command execution.", color = MaterialTheme.colorScheme.error)
 		LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			if (state.console.entries.isEmpty()) item { Text("Type a command below or choose a suggestion. Destructive app operations remain in Devices so Studio can request explicit approval.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-			items(state.console.entries, key = { it.id }) { entry -> ConsoleEntryCard(entry, onEvent) }
+			items(state.console.entries, key = { it.id }) { entry -> ConsoleEntryCard(entry, rules, onEvent) }
 			if (state.console.operation == ConsoleOperation.Running) item { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(18.dp)); Text("Running command…") } }
 		}
-		OutlinedTextField(
-			state.console.input,
-			{ onEvent(StudioEvent.ChangeConsoleInput(it)) },
-			label = { Text("Command") },
-			placeholder = { Text("devices list") },
-			supportingText = { Text(validationError ?: "↑/↓ history · Enter runs") },
-			isError = validationError != null,
-			singleLine = true,
-			modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-				if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-				when (event.key) {
-					Key.DirectionDown -> { onEvent(StudioEvent.NavigateConsoleHistory(1)); true }
-					Key.DirectionUp -> { onEvent(StudioEvent.NavigateConsoleHistory(-1)); true }
-					Key.Escape -> { onEvent(StudioEvent.ChangeConsoleInput("")); true }
-					Key.Enter -> if (canExecute && validationError == null && state.console.input.isNotBlank() && state.console.operation == ConsoleOperation.Idle) {
-						onEvent(StudioEvent.ExecuteConsoleCommand)
-						true
-					} else false
-					else -> false
-				}
-			},
+		ConsoleInput(state, canExecute && validationError == null, onEvent)
+		Text(
+			validationError ?: "Tab or Ctrl+Space completes · ↑/↓ history · Enter runs",
+			style = MaterialTheme.typography.bodySmall,
+			color = if (validationError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
 		)
 		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
 			OutlinedButton({ onEvent(StudioEvent.AddTestPlanOperation(state.console.input)) }, enabled = parseToolCommand(state.console.input, state.toolCatalog) != null && state.console.operation == ConsoleOperation.Idle) { Text("Add to test plan") }
@@ -72,13 +60,19 @@ import androidx.compose.ui.unit.dp
 	}
 }
 
-@Composable private fun ConsoleEntryCard(entry: ConsoleEntry, onEvent: (StudioEvent) -> Unit) {
+@Composable private fun ConsoleEntryCard(entry: ConsoleEntry, rules: TokenRules, onEvent: (StudioEvent) -> Unit) {
 	val container = if (entry.failed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerLow
+	var showDetails by remember(entry.id) { mutableStateOf(false) }
+	val details = remember(entry.structuredContent) { entry.structuredContent?.let(::prettyJson) }
 	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = container)) {
 		Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
 			Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-				Text("> ${entry.command}", fontWeight = FontWeight.Bold)
+				CodeSnippet(entry.command, language = rules, maxLines = 1, overflow = TextOverflow.Ellipsis)
 				Text(entry.output, color = if (entry.failed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface)
+				if (details != null) {
+					TextButton({ showDetails = !showDetails }, contentPadding = PaddingValues(0.dp)) { Text(if (showDetails) "Hide details" else "Show details") }
+					if (showDetails) CodeSnippet(details, language = JsonRules, softWrap = true)
+				}
 			}
 			entry.screenshot?.let { screenshot ->
 				ScreenshotThumbnail(
@@ -91,3 +85,31 @@ import androidx.compose.ui.unit.dp
 		}
 	}
 }
+
+/**
+ * The console line: a single-line code editor with the console language's highlighting, completion
+ * (including elements on the device's screen when Amoo supports it), and inline diagnostics.
+ */
+@Composable private fun ConsoleInput(state: StudioState, canRun: Boolean, onEvent: (StudioEvent) -> Unit) {
+	val assist = LocalReplAssist.current
+	val current by rememberUpdatedState(state)
+	val service = remember(assist) { ConsoleLanguageService({ current.toolCatalog }, { current.devices }, assist) }
+	val rules = remember(state.toolCatalog) { amooCommandRules(state.toolCatalog) }
+	val running = state.console.operation == ConsoleOperation.Running
+	OutlinedCard(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+		CodeEditor(
+			value = state.console.input,
+			onValueChange = { onEvent(StudioEvent.ChangeConsoleInput(it)) },
+			modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+			language = rules,
+			languageService = service,
+			readOnly = running,
+			singleLine = true,
+			onSubmit = { if (canRun && it.isNotBlank() && !running) onEvent(StudioEvent.ExecuteConsoleCommand) },
+			onHistory = { onEvent(StudioEvent.NavigateConsoleHistory(it)) },
+			labels = CodeEditorLabels(editorDescription = "Amoo command"),
+			options = CodeEditorOptions(highlightCurrentLine = false),
+		)
+	}
+}
+

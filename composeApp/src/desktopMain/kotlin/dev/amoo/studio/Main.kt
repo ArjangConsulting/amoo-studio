@@ -1,5 +1,6 @@
 package dev.amoo.studio
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -16,12 +17,23 @@ import com.maniramezan.credentialkeychain.CredentialKeychain
 import io.github.maniramezan.processrpc.BundledBinaryLocator
 import io.github.maniramezan.processrpc.ProcessRpcClient
 import io.github.maniramezan.processrpc.ProcessRpcState
+import io.github.maniramezan.processrpc.RpcNotification
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
@@ -71,15 +83,46 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 	apiKey.takeIf { !it.isBlank && connection.supports(PROVIDER_API_KEY_CAPABILITY) },
 )
 @Serializable private data class ChatRequest(val provider: ProviderRequest, val messages: List<ChatMessage>, val activeTest: AmooTest)
+@Serializable private data class AgentStartRequest(
+	val provider: ProviderRequest,
+	val messages: List<ChatMessage>,
+	val activeTest: AmooTest,
+	val deviceId: String,
+	val platform: String,
+	val appId: String,
+	val buildPath: String? = null,
+)
+@Serializable private data class AgentStartResult(val runId: String)
+@Serializable private data class GenerateRequest(
+	val sessionId: String? = null,
+	val test: AmooTest? = null,
+	val uiToolkit: UiToolkit? = null,
+	val testName: String? = null,
+	val allowIncomplete: Boolean = false,
+	val projectPath: String? = null,
+)
+@Serializable private data class GenerateResult(val generated: GeneratedSource? = null, val problem: GenerationProblem? = null, val test: AmooTest)
+@Serializable private data class AgentEventsResult(val state: AgentRunStatus, val events: List<AgentEvent>, val nextSeq: Int)
 @Serializable private data class ChatResult(val message: String, val proposedPlan: CompiledToolPlan? = null)
 @Serializable private data class ProviderCheckResult(val message: String)
-@Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?)
-@Serializable private data class ReplResult(val output: String)
+@Serializable private data class ReplRequest(val command: String, val activeTest: AmooTest, val selectedDeviceId: String?, val selectedProviderId: String?, val platform: String? = null, val captureScreenshot: Boolean = true)
+@Serializable private data class ReplResult(
+	val output: String,
+	val isError: Boolean? = null,
+	val tool: String? = null,
+	val structuredContent: String? = null,
+	val artifacts: List<String>? = null,
+	val screenshot: ScreenshotRef? = null,
+	val gesturePoint: GesturePoint? = null,
+	val actionIndex: Int? = null,
+	val sessionId: String? = null,
+)
+@Serializable private data class ReplRecordingStartRequest(val deviceId: String, val platform: String, val appId: String, val buildPath: String? = null)
+@Serializable private data class ReplRecordingStopRequest(val deviceId: String)
+@Serializable private data class ReplRecording(val sessionId: String, val actionCount: Int, val planPath: String? = null, val message: String? = null)
 @Serializable private data class TestRunRequest(val test: AmooTest, val deviceId: String, val providerId: String?)
 @Serializable private data class TestRunResult(val message: String, val sessionId: String? = null, val reportId: String? = null)
 @Serializable private data class TestStartResult(val runId: String)
-@Serializable private data class TestRunStatus(val runId: String, val state: TestRunState, val currentOperation: Int, val totalOperations: Int, val message: String, val sessionId: String? = null, val reportId: String? = null)
-@Serializable private enum class TestRunState { Running, Passed, Failed, Cancelled }
 @Serializable private data class ReportListResult(val reports: List<TestReport>)
 @Serializable private data class TestExportRequest(val test: AmooTest)
 @Serializable private data class TestExportResult(val fileName: String, val source: String)
@@ -94,27 +137,86 @@ private class StudioController(
 	private val providerStore = ProviderStore(preferences, CredentialKeychain.forCurrentPlatform("amoo-studio"), json)
 	// Keychain access can block or prompt; a single worker also keeps writes and deletes in order.
 	private val keychainDispatcher = Dispatchers.IO.limitedParallelism(1)
-	val state = MutableStateFlow(StudioState(hostPlatform = detectHostPlatform(), themeMode = loadThemeMode(), providers = providerStore.loadProfiles(), chat = ChatState(messages = loadChatMessages())))
+	val state = MutableStateFlow(StudioState(
+		hostPlatform = detectHostPlatform(),
+		themeMode = loadThemeMode(),
+		providers = providerStore.loadProfiles(),
+		chat = ChatState(messages = loadChatMessages()),
+		workbenchSplit = preferences.getFloat(WORKBENCH_SPLIT_KEY, DEFAULT_WORKBENCH_SPLIT),
+	))
+	val screenshotLoader: ScreenshotLoader = DesktopScreenshotLoader()
+
+	/**
+	 * Amoo's console completion and validation. Returns null when Amoo cannot answer, so the editor's
+	 * service falls back to the local grammar; cancellation propagates because the editor cancels stale requests.
+	 */
+	val replAssist: ReplAssist = object : ReplAssist {
+		override suspend fun complete(line: String, cursor: Int): ReplCompletion? = askAmoo(REPL_COMPLETE_CAPABILITY, "repl.complete") {
+			put("line", line)
+			put("cursor", cursor)
+			selectedDevice()?.let { device -> put("selectedDeviceId", device.id); put("platform", device.platform.name.lowercase()) }
+		}
+
+		override suspend fun validate(line: String): List<ReplDiagnostic>? =
+			askAmoo<ValidationResult>(REPL_VALIDATE_CAPABILITY, "repl.validate") { put("line", line) }?.diagnostics
+	}
+
+	@Serializable private data class ValidationResult(val diagnostics: List<ReplDiagnostic>)
+
+	private fun selectedDevice(): StudioDevice? = state.value.let { snapshot -> snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId } }
+
+	private suspend inline fun <reified T> askAmoo(capability: String, method: String, crossinline params: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): T? {
+		if (!state.value.connection.supports(capability)) return null
+		return try {
+			json.decodeFromJsonElement<T>(client.call(method, buildJsonObject { params() }))
+		} catch (cancelled: kotlinx.coroutines.CancellationException) {
+			throw cancelled
+		} catch (failure: Exception) {
+			null
+		}
+	}
+	private val mirror = DeviceMirror(scope, AmooStreamLauncher(::locateAmoo), onEvent = { event ->
+		withContext(Dispatchers.Main) { state.value = state.value.reduce(event) }
+	})
 	private val client = ProcessRpcClient(command = {
 		listOf(locateAmoo(), "studio", "serve")
 	})
 	private var chatJob: Job? = null
 	private var consoleJob: Job? = null
 	private var testRunJob: Job? = null
+	// Latest pushed status per run. A run can report progress before tests.start has returned its ID,
+	// so statuses are kept by run ID rather than matched against the active run on arrival.
+	private val pushedRunStatuses = MutableStateFlow<Map<String, TestRunStatus>>(emptyMap())
 
 	init {
 		loadApiKeys()
+		// Subscribe before starting the process: notifications are not replayed to late collectors.
+		scope.launch(start = CoroutineStart.UNDISPATCHED) { client.notifications.collect(::onNotification) }
 		client.start()
+		scope.launch { state.map { it.desiredMirrorDevice() }.distinctUntilChanged().collect(mirror::update) }
+		persistWorkbenchSplit()
 		scope.launch {
 			client.state.collect { processState ->
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
-					is ProcessRpcState.Unavailable -> state.value = state.value.copy(
+					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(
 						connection = ConnectionState.Unavailable(processState.reason, canInstallAmoo = isAmooMissing()),
 					)
-					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.copy(connection = ConnectionState.Starting)
+					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(connection = ConnectionState.Starting)
 				}
 			}
+		}
+	}
+
+	private fun onNotification(notification: RpcNotification) {
+		val decoded = runCatching { json.decodeAmooNotification(notification) }.getOrElse { error ->
+			System.err.println("Ignoring malformed ${notification.method} notification: ${error.message}")
+			return
+		}
+		when (decoded) {
+			is AmooNotification.TestProgress -> pushedRunStatuses.update { it + (decoded.status.runId to decoded.status) }
+			is AmooNotification.AgentEventNotice -> onAgentEvent(decoded.event)
+			null -> Unit
 		}
 	}
 
@@ -122,9 +224,18 @@ private class StudioController(
 		try {
 			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
 			state.value = state.value.copy(connection = connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities))
+			loadToolCatalog()
 		} catch (error: Exception) {
 			state.value = state.value.copy(connection = ConnectionState.Unavailable(error.message ?: "Handshake failed"))
 		}
+	}
+
+	/** Replaces the legacy console vocabulary with Amoo's catalog; older builds keep [ToolCatalog.Legacy]. */
+	private suspend fun loadToolCatalog() {
+		if (!state.value.connection.supports(TOOLS_CATALOG_CAPABILITY)) return
+		runCatching { json.decodeFromJsonElement<ToolCatalog>(client.call("tools.catalog")) }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.ToolCatalogLoaded(it)) }
+			.onFailure { state.value = state.value.copy(notice = "Could not load Amoo's tool catalog; the console uses its basic commands: ${it.message}") }
 	}
 
 	fun onEvent(event: StudioEvent) {
@@ -140,6 +251,8 @@ private class StudioController(
 			StudioEvent.ClearChat -> persistChatMessages()
 			StudioEvent.ExecuteConsoleCommand -> executeConsoleCommand()
 			StudioEvent.CancelConsoleCommand -> { consoleJob?.cancel(); consoleJob = null }
+			StudioEvent.StartConsoleRecording -> startConsoleRecording()
+			StudioEvent.StopConsoleRecording -> stopConsoleRecording()
 			StudioEvent.RunTest -> runTest()
 			StudioEvent.CancelTestRun -> cancelTestRun(activeRunId)
 			StudioEvent.ExportTest -> exportTest()
@@ -167,11 +280,18 @@ private class StudioController(
 			StudioEvent.ChooseProjectPath -> chooseProjectPath()
 			StudioEvent.BuildInstallAndRun -> buildInstallAndRun()
 			StudioEvent.ReinstallAndRun -> reinstallAndRun()
-			is StudioEvent.ResolveApproval -> if (event.approved) when (approvedAction) {
-				ApprovedAction.ResetAppData -> resetAppData()
-				ApprovedAction.InstallAmoo -> installAmoo()
+			is StudioEvent.ResolveApproval -> when (approvedAction) {
+				ApprovedAction.ResetAppData -> if (event.approved) resetAppData()
+				ApprovedAction.InstallAmoo -> if (event.approved) installAmoo()
+				// A decline is an answer too: the agent is told and continues another way.
+				is ApprovedAction.AgentTool -> answerAgentApproval(approvedAction, event.approved)
 				null -> Unit
 			}
+			StudioEvent.CancelAgentRun -> cancelAgentRun()
+			is StudioEvent.GenerateTest, is StudioEvent.RegenerateTest, StudioEvent.GenerateConsoleTest -> generateTest()
+			StudioEvent.CopyGeneratedTest -> state.value.generatedTest?.generated?.let { copyToClipboard(it.source, "Generated test copied") }
+			StudioEvent.SaveGeneratedTest -> saveGeneratedTest()
+			StudioEvent.SteerAgentRun -> steerAgentRun()
 			else -> Unit
 		}
 	}
@@ -359,6 +479,15 @@ private class StudioController(
 	}
 
 	private fun sendChat() {
+		val readiness = state.value.agentReadiness()
+		if (readiness is SessionReadiness.NoApp) {
+			state.value = state.value.copy(notice = "Set the app's bundle or application ID in Devices so the agent can launch ${readiness.device.name}'s app")
+			return
+		}
+		if (readiness is SessionReadiness.Ready) {
+			startAgentRun(readiness)
+			return
+		}
 		if (!requireCapability("chat.send")) return
 		val snapshot = state.value
 		val input = snapshot.chat.input.trim()
@@ -385,6 +514,151 @@ private class StudioController(
 		}
 	}
 
+	// MARK: Agent runs
+
+	/** Events that arrived before `agent.start` returned their run id. */
+	private val earlyAgentEvents = mutableMapOf<String, MutableList<AgentEvent>>()
+	private var agentWatchJob: Job? = null
+	private var lastAgentEventNanos = 0L
+
+	private fun startAgentRun(readiness: SessionReadiness.Ready) {
+		val snapshot = state.value
+		val input = snapshot.chat.input.trim()
+		if (input.isEmpty() || snapshot.agentRunActive) return
+		val provider = snapshot.providers.firstOrNull { it.id == snapshot.selectedProviderId } ?: run {
+			state.value = state.value.copy(notice = "Choose an AI provider before starting an agent run")
+			return
+		}
+		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
+			state.value = state.value.copy(notice = problem)
+			return
+		}
+		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
+		val request = AgentStartRequest(
+			provider = provider.toRequest(snapshot.connection),
+			messages = snapshot.chat.messages + userMessage,
+			activeTest = snapshot.test,
+			deviceId = readiness.device.id,
+			platform = readiness.device.platform.name.lowercase(),
+			appId = readiness.appId,
+			buildPath = snapshot.lastBuildArtifact,
+		)
+		chatJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<AgentStartResult>(client.call("agent.start", json.encodeToJsonElement(request))) }
+				.onSuccess { started ->
+					state.value = state.value.reduce(StudioEvent.AgentRunStarted(started.runId, userMessage))
+					persistChatMessages()
+					earlyAgentEvents.remove(started.runId)?.sortedBy { it.seq }?.forEach(::onAgentEvent)
+					earlyAgentEvents.clear()
+					watchAgentRun(started.runId)
+				}
+				.onFailure { state.value = state.value.reduce(StudioEvent.AgentRunFailed("Agent run failed to start: ${it.message}")) }
+			chatJob = null
+		}
+	}
+
+	private fun onAgentEvent(event: AgentEvent) {
+		val run = state.value.agentRun
+		if (run?.runId != event.runId) {
+			if (event.kind != AgentEventKind.AssistantDelta) earlyAgentEvents.getOrPut(event.runId) { mutableListOf() }.takeIf { it.size < 500 }?.add(event)
+			return
+		}
+		lastAgentEventNanos = System.nanoTime()
+		val wasTerminal = run.status.isTerminal
+		state.value = state.value.reduce(StudioEvent.AgentEventReceived(event))
+		val updated = state.value.agentRun ?: return
+		if (updated.gap) scope.launch { replayAgentEvents(updated.runId) }
+		if (!wasTerminal && updated.status.isTerminal) persistChatMessages()
+	}
+
+	/** Replays missed events after a gap, and every few seconds of silence in case a notification was dropped. */
+	private fun watchAgentRun(runId: String) {
+		agentWatchJob?.cancel()
+		lastAgentEventNanos = System.nanoTime()
+		agentWatchJob = scope.launch {
+			while (state.value.agentRun?.let { it.runId == runId && !it.status.isTerminal } == true) {
+				delay(AGENT_HEARTBEAT_MILLIS)
+				if (System.nanoTime() - lastAgentEventNanos >= AGENT_HEARTBEAT_MILLIS * 1_000_000) replayAgentEvents(runId)
+			}
+		}
+	}
+
+	private suspend fun replayAgentEvents(runId: String) {
+		val after = (state.value.agentRun?.takeIf { it.runId == runId }?.nextSeq ?: return) - 1
+		runCatching { json.decodeFromJsonElement<AgentEventsResult>(client.call("agent.events", buildJsonObject { put("runId", runId); put("after", after) })) }
+			.onSuccess { result ->
+				lastAgentEventNanos = System.nanoTime()
+				val wasTerminal = state.value.agentRun?.status?.isTerminal == true
+				state.value = state.value.reduce(StudioEvent.AgentEventsReplayed(runId, result.events, result.state, result.nextSeq))
+				if (!wasTerminal && state.value.agentRun?.status?.isTerminal == true) persistChatMessages()
+			}
+	}
+
+	private fun answerAgentApproval(action: ApprovedAction.AgentTool, approved: Boolean) = scope.launch {
+		runCatching { client.call("agent.approve", buildJsonObject { put("runId", action.runId); put("callId", action.callId); put("approved", approved) }) }
+			.onFailure { state.value = state.value.copy(notice = "Could not answer the approval: ${it.message}") }
+	}
+
+	private fun cancelAgentRun() {
+		val runId = state.value.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
+		scope.launch {
+			runCatching { client.call("agent.cancel", buildJsonObject { put("runId", runId) }) }
+				.onFailure { state.value = state.value.copy(notice = "Could not stop the agent: ${it.message}") }
+		}
+	}
+
+	private fun steerAgentRun() {
+		val snapshot = state.value
+		val runId = snapshot.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
+		val text = snapshot.chat.input.trim().takeIf(String::isNotEmpty) ?: return
+		val message = ChatMessage("user-${System.nanoTime()}", ChatRole.User, text)
+		scope.launch {
+			runCatching { client.call("agent.continue", buildJsonObject { put("runId", runId); put("message", text) }) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.AgentSteered(message)); persistChatMessages() }
+				.onFailure { state.value = state.value.copy(notice = "Could not send guidance: ${it.message}") }
+		}
+	}
+
+	// MARK: Test generation
+
+	private var generateJob: Job? = null
+
+	private fun generateTest() {
+		val snapshot = state.value
+		val generated = snapshot.generatedTest ?: return
+		if (!snapshot.connection.supports(TESTS_GENERATE_CAPABILITY)) {
+			state.value = state.value.reduce(StudioEvent.TestGenerationFailed("The connected Amoo version cannot generate tests. Update Amoo."))
+			return
+		}
+		val request = GenerateRequest(
+			sessionId = (generated.source as? GenerationSource.Session)?.sessionId,
+			test = snapshot.test.takeIf { generated.source == GenerationSource.AuthoredTest },
+			uiToolkit = generated.uiToolkit,
+			testName = generated.testName.trim().ifEmpty { null },
+			allowIncomplete = generated.allowIncomplete,
+			projectPath = snapshot.projectPath.ifBlank { null },
+		)
+		generateJob?.cancel()
+		generateJob = scope.launch {
+			runCatching { json.decodeFromJsonElement<GenerateResult>(client.call("tests.generate", json.encodeToJsonElement(request))) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.TestGenerated(it.generated, it.problem, it.test)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.TestGenerationFailed("Test generation failed: ${it.message}")) }
+		}
+	}
+
+	private fun saveGeneratedTest() {
+		val generated = state.value.generatedTest?.generated ?: return
+		val file = chooseFile(FileDialog.SAVE, "Save generated test", generated.fileName) ?: return
+		runCatching { file.writeText(generated.source) }
+			.onSuccess { state.value = state.value.copy(notice = "Saved ${file.name}") }
+			.onFailure { state.value = state.value.copy(notice = "Could not write file: ${it.message}") }
+	}
+
+	private fun copyToClipboard(text: String, notice: String) {
+		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+		state.value = state.value.copy(notice = notice)
+	}
+
 	private fun checkProvider(id: String) {
 		if (!requireCapability("providers.check")) return
 		val snapshot = state.value
@@ -405,21 +679,50 @@ private class StudioController(
 		val snapshot = state.value
 		val command = snapshot.console.input.trim()
 		if (command.isEmpty() || consoleJob?.isActive == true) return
-		// Fast feedback only; Amoo's repl.execute rejects the same commands, which is the real boundary.
-		if (command.contains(Regex("(^|\\s)(reset|erase|delete|uninstall)(\\s|$)", RegexOption.IGNORE_CASE))) {
-			state.value = state.value.copy(notice = "Destructive commands must use the confirmed workflow in Devices")
+		// Fast feedback only: Amoo's repl.execute applies the same grammar and refuses destructive tools.
+		ReplGrammar(snapshot.toolCatalog).parse(command).diagnostics.firstOrNull { it.severity == ReplSeverity.Error }?.let {
+			state.value = state.value.copy(notice = it.message)
 			return
 		}
 		state.value = state.value.reduce(StudioEvent.ConsoleCommandStarted)
-		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId)
+		val platform = snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId }?.platform?.name?.lowercase()
+		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId, platform)
 		consoleJob = scope.launch {
 			val entry = runCatching { json.decodeFromJsonElement<ReplResult>(client.call("repl.execute", json.encodeToJsonElement(request))) }
 				.fold(
-					onSuccess = { ConsoleEntry("command-${System.nanoTime()}", command, it.output) },
+					onSuccess = {
+						ConsoleEntry(
+							"command-${System.nanoTime()}", command, it.output, failed = it.isError == true, tool = it.tool,
+							structuredContent = it.structuredContent, artifacts = it.artifacts.orEmpty(), screenshot = it.screenshot, gesturePoint = it.gesturePoint,
+							actionIndex = it.actionIndex, sessionId = it.sessionId,
+						)
+					},
 					onFailure = { ConsoleEntry("command-${System.nanoTime()}", command, "Command failed: ${it.message}", failed = true) },
 				)
 			if (state.value.console.operation == ConsoleOperation.Running) state.value = state.value.reduce(StudioEvent.ConsoleCommandFinished(entry))
 			consoleJob = null
+		}
+	}
+
+	// MARK: Console recording
+
+	/** Starts the session the reducer just marked as starting. It can boot the device and build Amoo's companion, so it may take minutes. */
+	private fun startConsoleRecording() {
+		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Starting } ?: return
+		val request = ReplRecordingStartRequest(recording.device.id, recording.device.platform.name.lowercase(), recording.appId, state.value.lastBuildArtifact)
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.startRecording", json.encodeToJsonElement(request), timeoutMs = RECORDING_START_TIMEOUT_MILLIS)) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStarted(it.sessionId, it.actionCount)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not start recording: ${it.message}")) }
+		}
+	}
+
+	private fun stopConsoleRecording() {
+		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Stopping } ?: return
+		scope.launch {
+			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.stopRecording", json.encodeToJsonElement(ReplRecordingStopRequest(recording.device.id)), timeoutMs = RECORDING_STOP_TIMEOUT_MILLIS)) }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStopped(it.actionCount, it.planPath, it.message)) }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not stop recording: ${it.message}")) }
 		}
 	}
 
@@ -449,13 +752,12 @@ private class StudioController(
 		runCatching { json.decodeFromJsonElement<TestStartResult>(client.call("tests.start", json.encodeToJsonElement(request))) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${it.message}")); testRunJob = null }
 			.onSuccess { started ->
-				// Poll quickly while operations advance and back off to 1s while one is long-running.
+				val pushed = state.value.connection.supports(TESTS_PROGRESS_CAPABILITY)
+				var previous: TestRunStatus? = null
+				// Polling backs off from 250 ms to 1 s while one operation is long-running.
 				var pollDelayMillis = 250L
-				var lastOperation = -1
 				while (testRunJob?.isActive == true) {
-					val status = runCatching {
-						json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", started.runId) }))
-					}.getOrElse {
+					val status = runCatching { nextRunStatus(started.runId, previous, pushed, pollDelayMillis) }.getOrElse {
 						state.value = state.value.reduce(StudioEvent.TestRunFailed("Test progress failed: ${it.message}"))
 						break
 					}
@@ -464,17 +766,34 @@ private class StudioController(
 						break
 					}
 					state.value = state.value.reduce(StudioEvent.TestRunProgress(status.runId, status.message, status.currentOperation, status.totalOperations))
-					pollDelayMillis = if (status.currentOperation != lastOperation) 250L else (pollDelayMillis * 2).coerceAtMost(1_000)
-					lastOperation = status.currentOperation
+					pollDelayMillis = if (status.currentOperation != previous?.currentOperation) 250L else (pollDelayMillis * 2).coerceAtMost(1_000)
+					previous = status
 					when (status.state) {
-						TestRunState.Running -> delay(pollDelayMillis)
+						TestRunState.Running -> Unit
 						TestRunState.Passed -> { state.value = state.value.reduce(StudioEvent.TestRunFinished(status.message, status.sessionId, status.reportId)); break }
 						TestRunState.Failed -> { state.value = state.value.reduce(StudioEvent.TestRunFailed(status.message)); break }
 						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = status.message); break }
 					}
 				}
+				pushedRunStatuses.update { it - started.runId }
 				testRunJob = null
 			}
+	}
+
+	/**
+	 * Waits for the run's next status. With [pushed] progress it waits for a notification that differs
+	 * from [previous], polling `tests.status` only as a heartbeat in case one was dropped; otherwise it
+	 * polls after [pollDelayMillis].
+	 */
+	private suspend fun nextRunStatus(runId: String, previous: TestRunStatus?, pushed: Boolean, pollDelayMillis: Long): TestRunStatus {
+		if (pushed) {
+			withTimeoutOrNull(PUSHED_PROGRESS_HEARTBEAT_MILLIS) {
+				pushedRunStatuses.mapNotNull { it[runId] }.first { it != previous }
+			}?.let { return it }
+		} else if (previous != null) {
+			delay(pollDelayMillis)
+		}
+		return json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", runId) }))
 	}
 
 	private fun cancelTestRun(runId: String?) {
@@ -572,8 +891,21 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); client.close() }
+	// Dragging the divider emits many fractions; persist once it settles.
+	@OptIn(FlowPreview::class)
+	private fun persistWorkbenchSplit() = scope.launch {
+		state.map { it.workbenchSplit }.distinctUntilChanged().drop(1).debounce(500).collect { preferences.putFloat(WORKBENCH_SPLIT_KEY, it) }
+	}
+
+	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); agentWatchJob?.cancel(); generateJob?.cancel(); mirror.close(); client.close() }
 }
+
+private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
+private const val WORKBENCH_SPLIT_KEY = "workbenchSplit"
+private const val AGENT_HEARTBEAT_MILLIS = 5_000L
+// Starting a recording can boot the device and build the companion; stopping writes the plan.
+private const val RECORDING_START_TIMEOUT_MILLIS = 15 * 60_000L
+private const val RECORDING_STOP_TIMEOUT_MILLIS = 2 * 60_000L
 
 private fun detectHostPlatform(): HostPlatform {
 	val osName = System.getProperty("os.name").orEmpty().lowercase()
@@ -584,11 +916,28 @@ private fun detectHostPlatform(): HostPlatform {
 	}
 }
 
-private fun locateAmoo(): String = locateExecutable(name = "amoo", environmentVariable = "AMOO_BINARY")
+// Extracted once per process: the first caller is the RPC launch on an IO thread, so the UI never waits.
+private val embeddedAmoo: Result<File?> by lazy {
+	runCatching {
+		AmooRuntimeInstaller(
+			resourcesDirectory = System.getProperty("compose.application.resources.dir")?.let(::File),
+			runtimeRoot = AmooRuntimeInstaller.defaultRuntimeRoot(detectHostPlatform()),
+		).install()
+	}
+}
+
+/** `AMOO_BINARY` wins for development; packaged builds then use their embedded runtime, which carries prebuilt companions. */
+private fun locateAmoo(): String {
+	if (System.getenv("AMOO_BINARY").isNullOrBlank()) {
+		embeddedAmoo.getOrThrow()?.let { return it.absolutePath }
+	}
+	return locateExecutable(name = "amoo", environmentVariable = "AMOO_BINARY")
+}
 
 private fun locateHomebrew(): String = locateExecutable(name = "brew")
 
-private fun isAmooMissing(): Boolean = System.getenv("AMOO_BINARY").isNullOrBlank() && runCatching { locateAmoo() }.isFailure
+// An embedded runtime that fails to extract is a broken install, not a missing Amoo: offering Homebrew would hide it.
+private fun isAmooMissing(): Boolean = System.getenv("AMOO_BINARY").isNullOrBlank() && embeddedAmoo.isSuccess && runCatching { locateAmoo() }.isFailure
 
 private fun locateExecutable(name: String, environmentVariable: String? = null): String {
 	if (environmentVariable != null) {
@@ -642,6 +991,8 @@ fun main() = application {
 		LaunchedEffect(Unit) {
 			installDockIcon()
 		}
-		AmooStudioApp(state, controller::onEvent)
+		CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader, LocalReplAssist provides controller.replAssist) {
+			AmooStudioApp(state, controller::onEvent)
+		}
 	}
 }

@@ -16,6 +16,8 @@ data class StudioState(
 	val isTestDirty: Boolean = false,
 	val testExecution: TestExecution = TestExecution.Idle,
 	val operationDraft: ToolOperationDraft = ToolOperationDraft(),
+	/** The console and plan-editor vocabulary; [ToolCatalog.Legacy] until Amoo's `tools.catalog` loads. */
+	val toolCatalog: ToolCatalog = ToolCatalog.Legacy,
 	val lastSessionId: String? = null,
 	val lastReportId: String? = null,
 	val reports: List<TestReport> = emptyList(),
@@ -41,7 +43,16 @@ data class StudioState(
 	val mcpStatus: McpStatus = McpStatus.Unknown,
 	val testExportInProgress: Boolean = false,
 	val amooInstall: AmooInstallState = AmooInstallState.Idle,
+	val mirror: DeviceMirrorState = DeviceMirrorState(),
+	/** The current or most recent agent run in AI testing. */
+	val agentRun: AgentRunState? = null,
+	/** The most recent generated test, shown in the Generated test section. */
+	val generatedTest: GeneratedTestState? = null,
+	/** Fraction of the workbench width given to the console or agent feed; the device pane gets the rest. */
+	val workbenchSplit: Float = DEFAULT_WORKBENCH_SPLIT,
 )
+
+const val DEFAULT_WORKBENCH_SPLIT = 0.6f
 
 sealed interface AmooInstallState {
 	data object Idle : AmooInstallState
@@ -64,7 +75,7 @@ enum class HostPlatform(val label: String) {
 	Unsupported("Unsupported host"),
 }
 
-enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Console("Console"), Reports("Reports"), Settings("Settings") }
+enum class StudioSection(val title: String) { Overview("Overview"), Tests("Tests"), Devices("Devices"), Chat("AI testing"), Console("Console"), GeneratedTest("Generated test"), Reports("Reports"), Settings("Settings") }
 
 @Serializable
 data class AmooTest(
@@ -86,31 +97,24 @@ data class CompiledToolPlan(
 	val compilerVersion: String,
 	val operations: List<String> = emptyList(),
 	val toolOperations: List<ToolOperation> = emptyList(),
+	/** Notes from compiling a recorded session; written by Amoo, preserved by Studio. */
+	val warnings: List<PlanWarning> = emptyList(),
 )
 
 @Serializable data class ToolOperation(val id: String, val tool: String, val arguments: Map<String, String> = emptyMap())
-data class ToolOperationDraft(val tool: String = TOOL_CATALOG.first().name, val arguments: Map<String, String> = emptyMap())
-data class ToolDefinition(val name: String, val description: String, val arguments: List<ToolArgument> = emptyList())
-data class ToolArgument(val name: String, val label: String, val required: Boolean = false, val placeholder: String = "")
+data class ToolOperationDraft(val tool: String = "tap_element", val arguments: Map<String, String> = emptyMap())
 
-val TOOL_CATALOG = listOf(
-	ToolDefinition("tap_element", "Tap a control by accessibility identity", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
-	ToolDefinition("set_text", "Focus, clear, and fill a text field", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("value", "Value", required = true))),
-	ToolDefinition("type_text", "Type into the focused field", listOf(ToolArgument("text", "Text", required = true))),
-	ToolDefinition("swipe_in_direction", "Swipe from the screen center", listOf(ToolArgument("direction", "Direction", required = true, placeholder = "up, down, left, right"), ToolArgument("distance", "Distance", placeholder = "300"))),
-	ToolDefinition("wait_for_element", "Wait until an element appears", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("timeout_ms", "Timeout (ms)", placeholder = "5000"))),
-	ToolDefinition("assert_visible", "Require an element to be visible", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
-	ToolDefinition("assert_not_visible", "Require an element to be absent", listOf(ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"), ToolArgument("contains_text", "Contains text"))),
-	ToolDefinition("assert_text", "Require matching text", listOf(ToolArgument("expected", "Expected text", required = true), ToolArgument("id", "Accessibility ID"), ToolArgument("label", "Label"))),
-	ToolDefinition("take_screenshot", "Capture a report artifact"),
-	ToolDefinition("press_back", "Navigate back"),
-)
-
-fun ToolOperationDraft.validationError(): String? {
-	val definition = TOOL_CATALOG.firstOrNull { it.name == tool } ?: return "Unsupported tool: $tool"
+/** Why [ToolOperationDraft] cannot be added to the plan under [catalog], or null when it can. */
+fun ToolOperationDraft.validationError(catalog: ToolCatalog): String? {
+	val definition = catalog.tool(tool)?.takeIf { it.planTool != null } ?: return "Unsupported tool: $tool"
 	val missing = definition.arguments.filter { it.required && arguments[it.name].isNullOrBlank() }
-	if (missing.isNotEmpty()) return "Required: ${missing.joinToString { it.label }}"
-	if (tool in setOf("tap_element", "wait_for_element", "assert_visible", "assert_not_visible") && listOf("id", "label", "contains_text").none { !arguments[it].isNullOrBlank() }) {
+	if (missing.isNotEmpty()) return "Required: ${missing.joinToString { it.name }}"
+	definition.arguments.forEach { argument ->
+		val value = arguments[argument.name]?.takeIf(String::isNotBlank) ?: return@forEach
+		val values = argument.values?.takeIf { argument.valuesAreExhaustive && it.isNotEmpty() } ?: return@forEach
+		if (values.none { it.equals(value, ignoreCase = true) }) return "${argument.name} must be one of: ${values.joinToString()}"
+	}
+	if (definition.category == "legacy" && tool in ToolCatalog.LEGACY_SELECTOR_TOOLS && listOf("id", "label", "contains_text").none { !arguments[it].isNullOrBlank() }) {
 		return "Provide an accessibility ID, label, or text selector"
 	}
 	return null
@@ -197,12 +201,25 @@ data class ConsoleState(
 	val input: String = "",
 	val entries: List<ConsoleEntry> = emptyList(),
 	val operation: ConsoleOperation = ConsoleOperation.Idle,
-	val suggestionIndex: Int = 0,
 	val historyIndex: Int? = null,
+	val recording: ConsoleRecording? = null,
 )
 
-@Serializable data class ConsoleEntry(val id: String, val command: String, val output: String, val failed: Boolean = false)
-data class ConsoleSuggestion(val command: String, val description: String)
+/** A finished console command. [tool], [structuredContent], and [artifacts] come from Amoo builds with `repl.structuredResults`. */
+@Serializable data class ConsoleEntry(
+	val id: String,
+	val command: String,
+	val output: String,
+	val failed: Boolean = false,
+	val tool: String? = null,
+	val structuredContent: String? = null,
+	val artifacts: List<String> = emptyList(),
+	val screenshot: ScreenshotRef? = null,
+	val gesturePoint: GesturePoint? = null,
+	/** Set when Amoo recorded the command into session [sessionId] as plan step `step-<actionIndex>`. */
+	val actionIndex: Int? = null,
+	val sessionId: String? = null,
+)
 sealed interface ConsoleOperation { data object Idle : ConsoleOperation; data object Running : ConsoleOperation }
 
 @Serializable
@@ -219,7 +236,12 @@ data class StudioDevice(
 data class CreateDeviceState(val platform: TestPlatform, val name: String = "", val runtime: String = "", val deviceType: String = "")
 sealed interface DeviceOperation { data object Idle : DeviceOperation; data class Working(val message: String) : DeviceOperation }
 data class PendingApproval(val title: String, val message: String, val action: ApprovedAction, val confirmLabel: String = "Confirm")
-sealed interface ApprovedAction { data object ResetAppData : ApprovedAction; data object InstallAmoo : ApprovedAction }
+sealed interface ApprovedAction {
+	data object ResetAppData : ApprovedAction
+	data object InstallAmoo : ApprovedAction
+	/** An agent's destructive tool call waiting for the user. */
+	data class AgentTool(val runId: String, val callId: String) : ApprovedAction
+}
 
 const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
 const val AMOO_HOMEBREW_FORMULA = "amoo"
@@ -290,14 +312,22 @@ sealed interface StudioEvent {
 	data object ClearChat : StudioEvent
 	data object RetryLastChat : StudioEvent
 	data class ChangeConsoleInput(val value: String) : StudioEvent
-	data class ChooseConsoleSuggestion(val command: String) : StudioEvent
-	data class MoveConsoleSuggestion(val delta: Int) : StudioEvent
+	data class ToolCatalogLoaded(val catalog: ToolCatalog) : StudioEvent
 	data class NavigateConsoleHistory(val delta: Int) : StudioEvent
 	data object ExecuteConsoleCommand : StudioEvent
 	data object ConsoleCommandStarted : StudioEvent
 	data class ConsoleCommandFinished(val entry: ConsoleEntry) : StudioEvent
 	data object CancelConsoleCommand : StudioEvent
 	data object ClearConsole : StudioEvent
+	data object StartConsoleRecording : StudioEvent
+	data class ConsoleRecordingStarted(val sessionId: String, val actionCount: Int) : StudioEvent
+	data object StopConsoleRecording : StudioEvent
+	data class ConsoleRecordingStopped(val actionCount: Int?, val planPath: String?, val message: String?) : StudioEvent
+	data class ConsoleRecordingFailed(val message: String) : StudioEvent
+	/** Amoo exited while recording; it ends recordings on shutdown, so what was recorded is kept. */
+	data object ConsoleRecordingInterrupted : StudioEvent
+	data object DismissConsoleRecording : StudioEvent
+	data object GenerateConsoleTest : StudioEvent
 	data class ShowNotice(val message: String?) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
 	data object RefreshMcpStatus : StudioEvent
@@ -324,6 +354,31 @@ sealed interface StudioEvent {
 	data class ResolveApproval(val approved: Boolean) : StudioEvent
 	data class DeviceOperationStarted(val message: String) : StudioEvent
 	data class DeviceOperationFinished(val message: String, val artifact: String? = null) : StudioEvent
+	data class MirrorStarting(val deviceId: String) : StudioEvent
+	data class MirrorFrameReceived(val deviceId: String, val frame: DeviceFrame, val framesPerSecond: Double) : StudioEvent
+	data class MirrorReconnecting(val deviceId: String, val reason: String) : StudioEvent
+	data class MirrorUnavailable(val reason: String) : StudioEvent
+	data object MirrorStopped : StudioEvent
+	data object ToggleMirrorPaused : StudioEvent
+	data class PinScreenshot(val pinned: PinnedScreenshot) : StudioEvent
+	data object ReturnToLiveMirror : StudioEvent
+	data class ChangeWorkbenchSplit(val fraction: Float) : StudioEvent
+	data class AgentRunStarted(val runId: String, val request: ChatMessage) : StudioEvent
+	data class AgentEventReceived(val event: AgentEvent) : StudioEvent
+	data class AgentEventsReplayed(val runId: String, val events: List<AgentEvent>, val status: AgentRunStatus, val nextSeq: Int) : StudioEvent
+	data class AgentRunFailed(val message: String) : StudioEvent
+	data object CancelAgentRun : StudioEvent
+	data object SteerAgentRun : StudioEvent
+	data class AgentSteered(val message: ChatMessage) : StudioEvent
+	data object DismissAgentRun : StudioEvent
+	data class GenerateTest(val source: GenerationSource, val stepScreenshots: Map<String, PinnedScreenshot> = emptyMap()) : StudioEvent
+	data class TestGenerated(val generated: GeneratedSource?, val problem: GenerationProblem?, val test: AmooTest) : StudioEvent
+	data class TestGenerationFailed(val message: String) : StudioEvent
+	data class SelectGeneratedOperation(val operationId: String?) : StudioEvent
+	data class ChangeGeneratedTestOptions(val uiToolkit: UiToolkit? = null, val testName: String? = null) : StudioEvent
+	data class RegenerateTest(val allowIncomplete: Boolean) : StudioEvent
+	data object SaveGeneratedTest : StudioEvent
+	data object CopyGeneratedTest : StudioEvent
 }
 
 fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
@@ -352,7 +407,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.RemoveTestStep -> copy(test = test.copy(steps = test.steps.filterNot { it.id == event.id }), isTestDirty = true)
 	is StudioEvent.AddTestPlanOperation -> {
 		val command = event.command.trim()
-		val parsed = parseToolCommand(command)
+		val parsed = parseToolCommand(command, toolCatalog)
 		if (command.isEmpty()) this else copy(
 			test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio-console", "1")).let { plan ->
 				if (parsed != null) plan.copy(toolOperations = plan.toolOperations + ToolOperation("operation-${nextOperationId(plan.toolOperations)}", parsed.tool, parsed.arguments))
@@ -368,7 +423,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	)
 	is StudioEvent.ChangeToolOperationType -> copy(operationDraft = ToolOperationDraft(event.tool))
 	is StudioEvent.ChangeToolOperationArgument -> copy(operationDraft = operationDraft.copy(arguments = operationDraft.arguments + (event.name to event.value)))
-	StudioEvent.AddToolOperation -> if (operationDraft.validationError() != null) this else copy(
+	StudioEvent.AddToolOperation -> if (operationDraft.validationError(toolCatalog) != null) this else copy(
 		test = test.copy(compiledPlan = (test.compiledPlan ?: CompiledToolPlan("studio", "1")).let { plan ->
 			plan.copy(toolOperations = plan.toolOperations + ToolOperation("operation-${nextOperationId(plan.toolOperations)}", operationDraft.tool, operationDraft.arguments.filterValues(String::isNotBlank)))
 		}),
@@ -421,9 +476,11 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())
 	StudioEvent.RetryLastChat -> copy(chat = chat.copy(input = chat.messages.lastOrNull { it.role == ChatRole.User }?.content.orEmpty(), lastError = null))
-	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value, suggestionIndex = 0, historyIndex = null))
-	is StudioEvent.ChooseConsoleSuggestion -> copy(console = console.copy(input = event.command, suggestionIndex = 0, historyIndex = null))
-	is StudioEvent.MoveConsoleSuggestion -> copy(console = console.copy(suggestionIndex = (console.suggestionIndex + event.delta).coerceAtLeast(0)))
+	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value, historyIndex = null))
+	is StudioEvent.ToolCatalogLoaded -> copy(
+		toolCatalog = event.catalog,
+		operationDraft = operationDraft.takeIf { event.catalog.tool(it.tool)?.planTool != null } ?: ToolOperationDraft(event.catalog.planTools.firstOrNull()?.name ?: operationDraft.tool),
+	)
 	is StudioEvent.NavigateConsoleHistory -> {
 		if (console.entries.isEmpty()) this else {
 			val current = console.historyIndex ?: console.entries.size
@@ -433,9 +490,18 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	}
 	StudioEvent.ExecuteConsoleCommand -> this
 	StudioEvent.ConsoleCommandStarted -> copy(console = console.copy(operation = ConsoleOperation.Running), notice = null)
-	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(input = "", entries = console.entries + event.entry, operation = ConsoleOperation.Idle, suggestionIndex = 0, historyIndex = null))
+	is StudioEvent.ConsoleCommandFinished -> copy(console = console.copy(
+		input = "",
+		entries = console.entries + event.entry,
+		operation = ConsoleOperation.Idle,
+		historyIndex = null,
+		recording = console.recording?.recording(event.entry),
+	))
 	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
-	StudioEvent.ClearConsole -> copy(console = ConsoleState())
+	StudioEvent.ClearConsole -> copy(console = ConsoleState(recording = console.recording))
+	StudioEvent.StartConsoleRecording, is StudioEvent.ConsoleRecordingStarted, StudioEvent.StopConsoleRecording, is StudioEvent.ConsoleRecordingStopped,
+	is StudioEvent.ConsoleRecordingFailed, StudioEvent.ConsoleRecordingInterrupted, StudioEvent.DismissConsoleRecording, StudioEvent.GenerateConsoleTest,
+	-> reduceConsoleRecording(event)
 	is StudioEvent.ShowNotice -> copy(notice = event.message)
 	StudioEvent.RefreshMcpStatus -> copy(mcpStatus = McpStatus.Checking)
 	is StudioEvent.McpStatusLoaded -> copy(mcpStatus = McpStatus.Ready(event.transport, event.arguments))
@@ -459,7 +525,82 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ResolveApproval -> copy(pendingApproval = null)
 	is StudioEvent.DeviceOperationStarted -> copy(deviceOperation = DeviceOperation.Working(event.message), notice = null)
 	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message, lastBuildArtifact = event.artifact ?: lastBuildArtifact)
+	is StudioEvent.MirrorStarting -> copy(mirror = mirror.copy(status = MirrorStatus.Starting, deviceId = event.deviceId, frame = mirror.frame.takeIf { mirror.deviceId == event.deviceId }))
+	// A frame from a stream that was already replaced (another device) is dropped.
+	is StudioEvent.MirrorFrameReceived -> if (event.deviceId != mirror.deviceId) this else copy(mirror = mirror.copy(status = MirrorStatus.Live, frame = event.frame, framesPerSecond = event.framesPerSecond))
+	is StudioEvent.MirrorReconnecting -> if (event.deviceId != mirror.deviceId) this else copy(mirror = mirror.copy(status = MirrorStatus.Reconnecting(event.reason)))
+	is StudioEvent.MirrorUnavailable -> copy(mirror = mirror.copy(status = MirrorStatus.Unavailable(event.reason)))
+	StudioEvent.MirrorStopped -> copy(mirror = mirror.copy(status = if (mirror.paused) MirrorStatus.Paused else MirrorStatus.Off, framesPerSecond = 0.0))
+	StudioEvent.ToggleMirrorPaused -> copy(mirror = mirror.copy(paused = !mirror.paused, status = if (mirror.paused) mirror.status else MirrorStatus.Paused))
+	is StudioEvent.PinScreenshot -> copy(mirror = mirror.copy(pinned = event.pinned))
+	StudioEvent.ReturnToLiveMirror -> copy(mirror = mirror.copy(pinned = null))
+	is StudioEvent.ChangeWorkbenchSplit -> copy(workbenchSplit = event.fraction.coerceIn(MIN_WORKBENCH_SPLIT, MAX_WORKBENCH_SPLIT))
+	is StudioEvent.AgentRunStarted -> copy(
+		agentRun = AgentRunState(event.runId, event.request.content),
+		chat = chat.copy(input = "", messages = chat.messages + event.request, lastError = null),
+		notice = null,
+	)
+	is StudioEvent.AgentEventReceived -> applyingAgentRun(agentRun?.applying(event.event))
+	is StudioEvent.AgentEventsReplayed -> applyingAgentRun(agentRun?.takeIf { it.runId == event.runId }?.replaying(event.events, event.status, event.nextSeq))
+	is StudioEvent.AgentRunFailed -> copy(chat = chat.copy(lastError = event.message), notice = event.message)
+	StudioEvent.CancelAgentRun, StudioEvent.SteerAgentRun -> this
+	is StudioEvent.AgentSteered -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message))
+	StudioEvent.DismissAgentRun -> if (agentRun?.status?.isTerminal != false) copy(agentRun = null) else this
+	is StudioEvent.GenerateTest -> copy(
+		section = StudioSection.GeneratedTest,
+		generatedTest = GeneratedTestState(
+			event.source,
+			stepScreenshots = event.stepScreenshots,
+			testName = (event.source as? GenerationSource.Session)?.title ?: test.name,
+		),
+	)
+	is StudioEvent.TestGenerated -> copy(generatedTest = generatedTest?.copy(
+		loading = false,
+		generated = event.generated,
+		problem = event.problem,
+		test = event.test,
+		selectedOperationId = generatedTest.selectedOperationId?.takeIf { id -> event.test.compiledPlan?.toolOperations?.any { it.id == id } == true }
+			?: event.test.compiledPlan?.toolOperations?.firstOrNull()?.id,
+	))
+	is StudioEvent.TestGenerationFailed -> copy(generatedTest = generatedTest?.copy(loading = false), notice = event.message)
+	is StudioEvent.SelectGeneratedOperation -> copy(generatedTest = generatedTest?.copy(selectedOperationId = event.operationId))
+	is StudioEvent.ChangeGeneratedTestOptions -> copy(generatedTest = generatedTest?.copy(
+		uiToolkit = event.uiToolkit ?: generatedTest.uiToolkit,
+		testName = event.testName ?: generatedTest.testName,
+	))
+	is StudioEvent.RegenerateTest -> copy(generatedTest = generatedTest?.copy(loading = true, allowIncomplete = event.allowIncomplete))
+	StudioEvent.SaveGeneratedTest, StudioEvent.CopyGeneratedTest -> this
 }
+
+/**
+ * Updates the agent run and what follows from it: an approval prompt while a destructive call waits, and the
+ * run's summary added to the conversation when it ends.
+ */
+private fun StudioState.applyingAgentRun(updated: AgentRunState?): StudioState {
+	val previous = agentRun
+	if (updated == null || updated == previous) return this
+	var next = copy(agentRun = updated)
+	val waiting = updated.pendingApprovalCallId
+	if (waiting != null && waiting != previous?.pendingApprovalCallId) {
+		val call = updated.events.lastOrNull { it.kind == AgentEventKind.ApprovalRequired && it.callId == waiting }
+		val arguments = call?.arguments.orEmpty().entries.joinToString("\n") { "${it.key} = ${it.value}" }
+		next = next.copy(pendingApproval = PendingApproval(
+			"Allow ${call?.tool ?: "this action"}?",
+			listOfNotNull(call?.text, arguments.takeIf(String::isNotEmpty)).joinToString("\n\n"),
+			ApprovedAction.AgentTool(updated.runId, waiting),
+			confirmLabel = "Allow",
+		))
+	} else if (waiting == null && (pendingApproval?.action as? ApprovedAction.AgentTool)?.runId == updated.runId) {
+		next = next.copy(pendingApproval = null)
+	}
+	if (updated.status.isTerminal && previous?.status?.isTerminal != true) {
+		updated.summary?.let { summary -> next = next.copy(chat = next.chat.copy(messages = next.chat.messages + ChatMessage("agent-${updated.runId}", ChatRole.Assistant, summary))) }
+	}
+	return next
+}
+
+const val MIN_WORKBENCH_SPLIT = 0.3f
+const val MAX_WORKBENCH_SPLIT = 0.8f
 
 private fun nextStepId(steps: List<TestStep>): Int = (steps.mapNotNull { it.id.removePrefix("step-").toIntOrNull() }.maxOrNull() ?: 0) + 1
 private fun nextOperationId(operations: List<ToolOperation>): Int = (operations.mapNotNull { it.id.removePrefix("operation-").toIntOrNull() }.maxOrNull() ?: 0) + 1
@@ -493,49 +634,19 @@ fun HostPlatform.supports(platform: TestPlatform): Boolean = when (this) {
 fun ConnectionState.supports(capability: String): Boolean =
 	this is ConnectionState.Ready && capability in capabilities
 
-fun StudioState.consoleSuggestions(): List<ConsoleSuggestion> {
-	val catalog = buildList {
-		add(ConsoleSuggestion("help", "Show commands supported by the connected Amoo engine"))
-		add(ConsoleSuggestion("devices list", "Discover simulators, emulators, and physical devices"))
-		devices.forEach { device -> add(ConsoleSuggestion("devices inspect ${device.id}", "Inspect ${device.name}")) }
-		selectedDeviceId?.let { id -> add(ConsoleSuggestion("devices inspect $id", "Inspect the selected device")) }
-		add(ConsoleSuggestion("tests validate", "Validate the active test: ${test.name}"))
-		add(ConsoleSuggestion("tests run", "Run the active test on the selected device"))
-		add(ConsoleSuggestion("sessions list", "List recent Amoo sessions"))
-		add(ConsoleSuggestion("reports list", "List available reports"))
-		selectedProviderId?.let { add(ConsoleSuggestion("providers inspect $it", "Inspect the selected AI provider profile")) }
-		if (selectedDeviceId != null) {
-			add(ConsoleSuggestion("tap_element label=\"Sign in\"", "Tap an element on the selected device"))
-			add(ConsoleSuggestion("set_text id=email value=\"person@example.com\"", "Fill a text field"))
-			add(ConsoleSuggestion("assert_visible id=home", "Assert that an element is visible"))
-			add(ConsoleSuggestion("take_screenshot", "Capture the current device screen"))
-		}
-	}
-	val terms = console.input.trim().lowercase().split(Regex("\\s+")).filter(String::isNotBlank)
-	return catalog.distinctBy { it.command }.filter { suggestion -> terms.all { it in suggestion.command.lowercase() || it in suggestion.description.lowercase() } }.take(8)
-}
-
 data class ParsedToolCommand(val tool: String, val arguments: Map<String, String>)
 
-fun parseToolCommand(command: String): ParsedToolCommand? {
-	val tokens = Regex("""(?:[^\s"']|"[^"]*"|'[^']*')+""").findAll(command.trim()).map { match ->
-		match.value.removeSurrounding("\"").removeSurrounding("'")
-	}.toList()
-	val tool = tokens.firstOrNull() ?: return null
-	val definition = TOOL_CATALOG.firstOrNull { it.name == tool } ?: return null
-	val arguments = tokens.drop(1).mapNotNull { token ->
-		val equals = token.indexOf('=')
-		if (equals <= 0) null else token.substring(0, equals) to token.substring(equals + 1).removeSurrounding("\"").removeSurrounding("'")
-	}.toMap()
-	val draft = ToolOperationDraft(tool, arguments)
-	return if (draft.validationError() == null && arguments.keys.all { key -> definition.arguments.any { it.name == key } }) ParsedToolCommand(tool, arguments) else null
+/**
+ * Parses a console line into a plan operation, or returns null when it is invalid or not a tool a plan
+ * can contain. The tool is renamed to its plan vocabulary, so `assert_absent` records as `assert_not_visible`.
+ */
+fun parseToolCommand(command: String, catalog: ToolCatalog): ParsedToolCommand? {
+	val parse = ReplGrammar(catalog).parse(command)
+	val tool = parse.command as? ReplCommand.Tool ?: return null
+	if (!parse.isValid) return null
+	val planTool = catalog.tool(tool.name)?.planTool ?: return null
+	return ParsedToolCommand(planTool, tool.arguments)
 }
 
-fun StudioState.consoleValidationError(): String? {
-	val command = console.input.trim()
-	if (command.isEmpty()) return null
-	if (parseToolCommand(command) != null) return null
-	if (command in setOf("help", "devices list", "tests validate", "tests run", "sessions list", "reports list") || command.startsWith("devices inspect ") || command.startsWith("providers inspect ")) return null
-	if (TOOL_CATALOG.any { command.startsWith(it.name) }) return "Check required arguments and use name=value syntax"
-	return "Unknown command. Choose a suggestion or run help."
-}
+/** The console line parsed against the loaded catalog. */
+fun StudioState.consoleParse(): ReplParse = ReplGrammar(toolCatalog).parse(console.input)

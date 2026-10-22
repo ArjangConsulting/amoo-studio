@@ -6,26 +6,31 @@ A Studio release pins three independent versions:
 - embedded Amoo executable version
 - `process-rpc-kotlin` dependency version
 
-The manual `Release` workflow downloads the Amoo binary and checksum from an Amoo GitHub release,
-verifies the checksum, and stages the executable under the matching Compose resource directory:
+The manual `Release` workflow downloads Amoo's release tarball for the platform
+(`amoo-<version>-macos-universal.tar.gz` or `amoo-<version>-linux-static.tar.gz`) and its `.sha256`
+from the Amoo GitHub release. It verifies the checksum, then stages the tarball unchanged as the
+runtime archive:
 
 ```text
-composeApp/app-resources/macos-arm64/amoo
-composeApp/app-resources/macos-x64/amoo
-composeApp/app-resources/linux-arm64/amoo
-composeApp/app-resources/linux-x64/amoo
+composeApp/app-resources/macos-arm64/amoo-runtime.tar.gz
+composeApp/app-resources/macos-arm64/amoo-runtime.tar.gz.sha256
+composeApp/app-resources/linux-x64/amoo-runtime.tar.gz
+composeApp/app-resources/linux-x64/amoo-runtime.tar.gz.sha256
 ```
 
-Gradle selects exactly one directory from the build host's operating system and architecture. The
-selected executable is therefore staged as `<application resources>/amoo`, which is the location
-resolved by `process-rpc-kotlin` at runtime.
+Compose packages only the subfolder that matches the build host, so the archive ends up in the
+application resources. On first launch Studio extracts it into a per-user runtime directory, keyed
+by checksum, and runs the extracted `amoo`. That copy finds the prebuilt companions next to it, so
+users never compile companion apps. `composeApp/app-resources/README.md` explains why the archive
+is not unpacked into the app bundle.
 
-The first automated release targets Apple Silicon macOS (DMG/PKG) and x64 Linux (DEB). Amoo releases
-must provide `amoo-macos-arm64`, `amoo-linux-x64`, and a `.sha256` asset alongside each executable.
-The workflow creates a draft GitHub release so the artifacts and platform signing can be reviewed
-before publication. Runtime compatibility is still validated by `system.handshake`; version pinning
-is not a substitute for protocol negotiation.
+The release targets Apple Silicon macOS (DMG/PKG) and x64 Linux (DEB). The Amoo version must be a
+release that publishes prebuilt companions and tarball checksums. Amoo 0.2.1 has neither, so it
+cannot be embedded. The workflow creates a draft GitHub release so the artifacts and platform
+signing can be reviewed before publication. Runtime compatibility is still validated by
+`system.handshake`; version pinning is not a substitute for protocol negotiation.
 
 CI packages without embedding Amoo so pull requests can validate `jpackage` independently of an Amoo
-release. The release workflow additionally runs `verifyEmbeddedAmoo` and cannot publish an empty GUI
-shell.
+release. The release workflow additionally runs `verifyEmbeddedAmoo`, which checks the archive's checksum
+and that it contains an executable `amoo` and the prebuilt companions, so it cannot publish an empty
+GUI shell or one that would compile companions on a user's machine.

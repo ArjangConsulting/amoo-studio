@@ -25,7 +25,11 @@ import androidx.compose.ui.unit.dp
 			if (state.testExecution is TestExecution.Running) OutlinedButton({ onEvent(StudioEvent.CancelTestRun) }) { Text("Cancel run") }
 			else Button({ onEvent(StudioEvent.RunTest) }, enabled = canRun) { Text("Run test") }
 			val canExport = plan?.toolOperations?.isNotEmpty() == true && state.connection.supports("tests.export") && !state.testExportInProgress
-			OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
+			if (state.connection.supports(TESTS_GENERATE_CAPABILITY)) {
+				OutlinedButton({ onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = plan?.toolOperations?.isNotEmpty() == true) { Text("Generate test") }
+			} else {
+				OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
+			}
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -51,7 +55,7 @@ import androidx.compose.ui.unit.dp
 			HorizontalDivider()
 			Text("Execution plan", style = MaterialTheme.typography.titleLarge)
 			Text("Add verified Amoo actions and assertions. Authored steps remain the source of truth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-			ToolOperationEditor(state.operationDraft, onEvent)
+			ToolOperationEditor(state.operationDraft, state.toolCatalog, onEvent)
 			val toolOperations = plan?.toolOperations.orEmpty()
 			if (toolOperations.isEmpty() && plan?.operations.isNullOrEmpty()) Text("Add at least one action or assertion before running this test.", color = MaterialTheme.colorScheme.error)
 			toolOperations.forEachIndexed { index, operation -> key(operation.id) {
@@ -81,38 +85,57 @@ import androidx.compose.ui.unit.dp
 }
 
 @Composable
-private fun ToolOperationEditor(draft: ToolOperationDraft, onEvent: (StudioEvent) -> Unit) {
+private fun ToolOperationEditor(draft: ToolOperationDraft, catalog: ToolCatalog, onEvent: (StudioEvent) -> Unit) {
 	var expanded by remember { mutableStateOf(false) }
-	val definition = TOOL_CATALOG.first { it.name == draft.tool }
+	val tools = catalog.planTools
+	val definition = catalog.tool(draft.tool) ?: tools.firstOrNull() ?: return
 	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 			Text("Add operation", style = MaterialTheme.typography.titleMedium)
 			Box {
 				OutlinedButton({ expanded = true }) { Text(definition.name) }
 				DropdownMenu(expanded, { expanded = false }) {
-					TOOL_CATALOG.forEach { tool -> DropdownMenuItem(
-						text = { Column { Text(tool.name); Text(tool.description, style = MaterialTheme.typography.bodySmall) } },
+					tools.forEach { tool -> DropdownMenuItem(
+						text = { Column { Text(tool.name); Text(tool.description, style = MaterialTheme.typography.bodySmall, maxLines = 2) } },
 						onClick = { expanded = false; onEvent(StudioEvent.ChangeToolOperationType(tool.name)) },
 					) }
 				}
 			}
 			Text(definition.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
-			definition.arguments.forEach { argument ->
-				OutlinedTextField(
-					value = draft.arguments[argument.name].orEmpty(),
-					onValueChange = { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, it)) },
-					label = { Text(argument.label + if (argument.required) " *" else "") },
-					placeholder = argument.placeholder.takeIf(String::isNotBlank)?.let { { Text(it) } },
-					singleLine = true,
-					modifier = Modifier.fillMaxWidth().focusNextOnTab(),
-				)
-			}
-			val validationError = draft.validationError()
+			definition.arguments.forEach { argument -> key(argument.name) { ToolArgumentField(argument, draft.arguments[argument.name].orEmpty(), onEvent) } }
+			val validationError = draft.validationError(catalog)
 			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
 				validationError?.let { Text(it, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 				Button({ onEvent(StudioEvent.AddToolOperation) }, enabled = validationError == null) { Text("Add operation") }
 			}
 		}
+	}
+}
+
+/** An argument input: chips for an exhaustive value set, otherwise a text field that lists known values as its placeholder. */
+@Composable
+private fun ToolArgumentField(argument: ToolArgumentSchema, value: String, onEvent: (StudioEvent) -> Unit) {
+	val label = argument.name + if (argument.required) " *" else ""
+	val values = argument.values.orEmpty()
+	if (argument.valuesAreExhaustive && values.isNotEmpty()) {
+		Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+			Text(label, style = MaterialTheme.typography.labelLarge)
+			Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+				values.forEach { option ->
+					FilterChip(value.equals(option, ignoreCase = true), { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, if (value == option) "" else option)) }, { Text(option) })
+				}
+			}
+		}
+	} else {
+		OutlinedTextField(
+			value = value,
+			onValueChange = { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, it)) },
+			label = { Text(label) },
+			placeholder = values.takeIf { it.isNotEmpty() }?.let { { Text(it.joinToString(", ")) } },
+			supportingText = argument.description.takeIf(String::isNotBlank)?.let { { Text(it, maxLines = 2) } },
+			singleLine = true,
+			modifier = Modifier.fillMaxWidth().focusNextOnTab(),
+		)
 	}
 }
 

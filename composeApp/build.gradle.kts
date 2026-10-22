@@ -39,7 +39,7 @@ kotlin {
 		named("desktopMain") {
 			dependencies {
 				implementation("com.github.maniramezan:process-rpc-kotlin:0.1.0")
-				implementation("com.maniramezan:credential-keychain-kotlin:0.1.0")
+				implementation("io.github.maniramezan:credential-keychain-kotlin:0.1.1")
 				implementation(compose.desktop.currentOs)
 				implementation(libs.coroutines.swing)
 			}

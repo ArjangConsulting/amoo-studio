@@ -21,8 +21,12 @@ dependencyResolutionManagement {
 	}
 }
 
-if (providers.gradleProperty("useLocalKmpComponents").orNull.toBoolean()) {
-	val localKmpComponents = file("../KMPComponents")
+// KMPComponents resolves from Maven Central by default. A sibling
+// checkout is included automatically when present; -PuseLocalKmpComponents=true|false overrides that.
+val localKmpComponents = file("../KMPComponents")
+val useLocalKmpComponents = providers.gradleProperty("useLocalKmpComponents").orNull?.toBoolean()
+	?: localKmpComponents.resolve("settings.gradle.kts").isFile
+if (useLocalKmpComponents) {
 	require(localKmpComponents.resolve("settings.gradle.kts").isFile) {
 		"useLocalKmpComponents requires KMPComponents to be checked out next to amoo-studio"
 	}
@@ -45,6 +49,37 @@ if (useLocalCredentialKeychain) {
 			substitute(module("io.github.maniramezan:credential-keychain-kotlin")).using(project(":core"))
 		}
 	}
+}
+
+// process-rpc-kotlin is resolved from JitPack by default. Point the build at a local checkout with
+// -PuseLocalProcessRpc=true (optionally -PlocalProcessRpcPath=...); when the property is unset, a
+// sibling checkout is used automatically if one exists.
+val localProcessRpc = file(providers.gradleProperty("localProcessRpcPath").orNull ?: "../process-rpc-kotlin")
+val useLocalProcessRpc = providers.gradleProperty("useLocalProcessRpc").orNull?.toBoolean()
+	?: localProcessRpc.resolve("settings.gradle.kts").isFile
+if (useLocalProcessRpc) {
+	require(localProcessRpc.resolve("settings.gradle.kts").isFile) {
+		"useLocalProcessRpc requires process-rpc-kotlin at ${localProcessRpc.path}"
+	}
+	includeBuild(localProcessRpc) {
+		// The library is a single root project; JitPack publishes it under the repository name.
+		dependencySubstitution {
+			substitute(module("com.github.maniramezan:process-rpc-kotlin")).using(project(":"))
+		}
+	}
+}
+
+// kmp-code-editor (com.arjangconsulting.codeeditor:code-editor) resolves from Maven Central by default. A
+// sibling checkout is included automatically when present; -PuseLocalCodeEditor=true|false overrides
+// that, and -PlocalCodeEditorPath=<path> points at another checkout.
+val localCodeEditor = file(providers.gradleProperty("localCodeEditorPath").orNull ?: "../kmp-code-editor")
+val useLocalCodeEditor = providers.gradleProperty("useLocalCodeEditor").orNull?.toBoolean()
+	?: localCodeEditor.resolve("settings.gradle.kts").isFile
+if (useLocalCodeEditor) {
+	require(localCodeEditor.resolve("settings.gradle.kts").isFile) {
+		"useLocalCodeEditor requires kmp-code-editor at ${localCodeEditor.path}"
+	}
+	includeBuild(localCodeEditor)
 }
 
 include(":composeApp")

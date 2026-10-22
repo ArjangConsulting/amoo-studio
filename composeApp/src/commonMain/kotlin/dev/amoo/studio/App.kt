@@ -30,6 +30,7 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 						StudioSection.Devices -> DevicesContent(state, onEvent)
 						StudioSection.Chat -> AiTestingContent(state, onEvent)
 						StudioSection.Console -> ConsoleContent(state, onEvent)
+						StudioSection.GeneratedTest -> GeneratedTestContent(state, onEvent)
 						StudioSection.Reports -> ReportsContent(state, onEvent)
 						StudioSection.Settings -> SettingsContent(state, onEvent)
 					}

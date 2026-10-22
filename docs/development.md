@@ -19,8 +19,11 @@ AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
 `credential-keychain-kotlin` resolves from Maven Central by default. When a checkout exists next to
 this repository (`../credential-keychain-kotlin`), Gradle includes it as a composite build instead.
 Override the detection with `-PuseLocalCredentialKeychain=true|false`, and point at a different
-checkout with `-PlocalCredentialKeychainPath=<path>`. `-PuseLocalKmpComponents=true` does the same
-for `../KMPComponents`.
+checkout with `-PlocalCredentialKeychainPath=<path>`. `process-rpc-kotlin` works the same way with
+`../process-rpc-kotlin`, `-PuseLocalProcessRpc=true|false`, and `-PlocalProcessRpcPath=<path>`.
+`../KMPComponents` is included the same way, with `-PuseLocalKmpComponents=true|false` to override
+the detection, and `../kmp-code-editor` with `-PuseLocalCodeEditor=true|false` and
+`-PlocalCodeEditorPath=<path>`.
 
 Without `AMOO_BINARY`, Studio searches packaged application resources and then `PATH`. An unavailable
 backend is represented in UI state and must never crash the desktop process.

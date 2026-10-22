@@ -306,15 +306,22 @@ class StudioStateTest {
 	}
 
 	@Test
-	fun `console suggestions include selected runtime context`() {
-		val state = StudioState(
-			console = ConsoleState(input = "pixel"),
-			devices = listOf(StudioDevice("emulator-5554", "Pixel 9", TestPlatform.Android, "16", DeviceStatus.Running)),
-		)
+	fun `loading the catalog replaces the legacy vocabulary and keeps a valid draft`() {
+		val catalog = ToolCatalog(listOf(ToolSchema("assert_absent", planTool = "assert_not_visible", arguments = listOf(ToolArgumentSchema("id")))))
 
-		val suggestions = state.consoleSuggestions()
+		val loaded = StudioState(operationDraft = ToolOperationDraft("tap_element")).reduce(StudioEvent.ToolCatalogLoaded(catalog))
 
-		assertEquals(listOf("devices inspect emulator-5554"), suggestions.map { it.command })
+		assertEquals(catalog, loaded.toolCatalog)
+		assertEquals("assert_absent", loaded.operationDraft.tool)
+	}
+
+	@Test
+	fun `console plan operations record under the plan vocabulary name`() {
+		val catalog = ToolCatalog(listOf(ToolSchema("assert_absent", planTool = "assert_not_visible", arguments = listOf(ToolArgumentSchema("id")))))
+
+		val state = StudioState(toolCatalog = catalog).reduce(StudioEvent.AddTestPlanOperation("assert_absent id=spinner"))
+
+		assertEquals(ToolOperation("operation-1", "assert_not_visible", mapOf("id" to "spinner")), state.test.compiledPlan?.toolOperations?.single())
 	}
 
 	@Test
@@ -358,7 +365,7 @@ class StudioStateTest {
 	fun `invalid tool command has inline remediation`() {
 		val state = StudioState(console = ConsoleState(input = "set_text id=email"))
 
-		assertEquals("Check required arguments and use name=value syntax", state.consoleValidationError())
+		assertEquals("Missing required argument: value.", state.consoleParse().diagnostics.single().message)
 	}
 
 	@Test
@@ -422,7 +429,7 @@ class StudioStateTest {
 		val state = StudioState()
 			.reduce(StudioEvent.ChangeToolOperationType("set_text"))
 
-		assertEquals("Required: Value", state.operationDraft.validationError())
+		assertEquals("Required: value", state.operationDraft.validationError(state.toolCatalog))
 
 		val first = state
 			.reduce(StudioEvent.ChangeToolOperationArgument("id", "email"))

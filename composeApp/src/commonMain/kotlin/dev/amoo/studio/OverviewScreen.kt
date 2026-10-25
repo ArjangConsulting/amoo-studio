@@ -1,52 +1,55 @@
 package dev.amoo.studio
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import io.github.maniramezan.kmpcomponents.FlowLayout
+import io.github.maniramezan.kmpcomponents.InlineProgressIndicator
+import io.github.maniramezan.kmpcomponents.NoticeCard
+import io.github.maniramezan.kmpcomponents.PrimaryButton
+import io.github.maniramezan.kmpcomponents.SecondaryButton
+import io.github.maniramezan.kmpcomponents.SectionCard
+import io.github.maniramezan.kmpcomponents.StatusMessage
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeTextButton
+import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable internal fun OverviewContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
-	Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+	Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.large)) {
 		ConnectionCard(state.connection, state.amooInstall, state.hostPlatform, onEvent)
-		Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-			Text("${state.hostPlatform.label} workspace", style = MaterialTheme.typography.titleMedium)
+		SectionCard("${state.hostPlatform.label} workspace", Modifier.fillMaxWidth()) {
 			Text(if (state.hostPlatform == HostPlatform.MacOS) "iOS and Android workflows are available when advertised by Amoo." else "Android workflows are available. iOS and Xcode require macOS.")
-		} }
-		Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-			FeatureCard("Create a test", "Write reusable steps and expectations in a portable .amootest file.", Modifier.weight(1f)) { onEvent(StudioEvent.NewTest) }
-			FeatureCard("Connect an AI", "Configure OpenAI, Claude, Ollama, or an OpenAI-compatible provider.", Modifier.weight(1f)) { onEvent(StudioEvent.SelectSection(StudioSection.Settings)) }
-			FeatureCard("Install MCP", "Copy a client configuration that launches the bundled Amoo MCP server.", Modifier.weight(1f)) { onEvent(StudioEvent.SelectSection(StudioSection.Settings)) }
+		}
+		SectionCard("Create a test", Modifier.fillMaxWidth(), description = "Write reusable steps and expectations in a portable .amootest file.") {
+			PrimaryButton("New test", { onEvent(StudioEvent.NewTest) })
+		}
+		SectionCard("Connect an AI", Modifier.fillMaxWidth(), description = "Configure OpenAI, Claude, Ollama, or an OpenAI-compatible provider.") {
+			SecondaryButton("Provider settings", { onEvent(StudioEvent.SelectSection(StudioSection.Settings)) })
+		}
+		SectionCard("Install MCP", Modifier.fillMaxWidth(), description = "Copy a client configuration that launches the bundled Amoo MCP server.") {
+			SecondaryButton("MCP settings", { onEvent(StudioEvent.SelectSection(StudioSection.Settings)) })
 		}
 	}
 }
 
 @Composable private fun ConnectionCard(connection: ConnectionState, amooInstall: AmooInstallState, hostPlatform: HostPlatform, onEvent: (StudioEvent) -> Unit) {
-	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) { Row(Modifier.fillMaxWidth().padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-		when (connection) {
-			ConnectionState.Starting -> { CircularProgressIndicator(); Column { Text("Starting Amoo", style = MaterialTheme.typography.titleMedium); Text("Connecting to the bundled automation engine…") } }
-			is ConnectionState.Ready -> Column { Text("Amoo ${connection.version} is ready", style = MaterialTheme.typography.titleMedium); Text("Protocol ${connection.protocolVersion} · ${connection.capabilities.joinToString()}") }
-			is ConnectionState.Unavailable -> {
-				Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-					Text("Amoo is unavailable", color = MaterialTheme.colorScheme.error)
-					Text(connection.reason)
-					if (amooInstall is AmooInstallState.Running) {
-						Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-							CircularProgressIndicator(Modifier.size(16.dp))
-							Text("Installing Amoo via Homebrew…")
-						}
-					}
-					if (amooInstall is AmooInstallState.Failed) Text(amooInstall.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-					if (connection.canInstallAmoo && hostPlatform != HostPlatform.Unsupported) {
-						Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-							OutlinedButton({ onEvent(StudioEvent.RequestInstallAmoo) }, enabled = amooInstall !is AmooInstallState.Running) { Text("Install via Homebrew") }
-							TextButton({ onEvent(StudioEvent.CopyInstallCommands) }) { Text("Copy install commands") }
-						}
-					}
+	when (connection) {
+		ConnectionState.Starting -> InlineProgressIndicator("Starting Amoo · Connecting to the bundled automation engine…")
+		is ConnectionState.Ready -> StatusMessage("Protocol ${connection.protocolVersion} · ${connection.capabilities.joinToString()}", title = "Amoo ${connection.version} is ready", tone = StatusTone.SUCCESS)
+		is ConnectionState.Unavailable -> {
+			NoticeCard(connection.reason, title = "Amoo is unavailable", tone = StatusTone.ERROR, actionLabel = "Retry", onAction = { onEvent(StudioEvent.RetryConnection) })
+			if (amooInstall is AmooInstallState.Running) InlineProgressIndicator("Installing Amoo via Homebrew…")
+			if (amooInstall is AmooInstallState.Failed) StatusMessage(amooInstall.message, tone = StatusTone.ERROR)
+			if (connection.canInstallAmoo && hostPlatform != HostPlatform.Unsupported) {
+				FlowLayout {
+					SecondaryButton("Install via Homebrew", { onEvent(StudioEvent.RequestInstallAmoo) }, enabled = amooInstall !is AmooInstallState.Running)
+					ThemeTextButton("Copy install commands", { onEvent(StudioEvent.CopyInstallCommands) })
 				}
-				Button({ onEvent(StudioEvent.RetryConnection) }) { Text("Retry") }
 			}
 		}
-	} }
+	}
 }

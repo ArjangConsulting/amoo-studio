@@ -186,4 +186,16 @@ class AgentAndGenerationTest {
 		assertEquals(PlanWarningKind.Excluded, result.warnings.single().kind)
 		assertEquals(PlanWarningKind.Approximate, plan.compiledPlan?.warnings?.single()?.kind)
 	}
+	@Test
+	fun `generated pane layouts are clamped and survive selection and regeneration`() {
+		val resized = StudioState(generatedTest = generationState())
+			.reduce(StudioEvent.ChangeGeneratedTestLayout(operationsSplit = Float.NaN, sourceSplit = 5f))
+			.reduce(StudioEvent.SelectGeneratedOperation("step-0"))
+			.reduce(StudioEvent.RegenerateTest(false))
+
+		assertEquals(0.5f, resized.generatedTest?.operationsSplit)
+		assertEquals(0.8f, resized.generatedTest?.sourceSplit)
+		assertEquals(0.55f, StudioState().reduce(StudioEvent.ChangeWorkbenchSplit(Float.NaN)).workbenchSplit)
+	}
+
 }

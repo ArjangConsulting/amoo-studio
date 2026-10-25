@@ -1,52 +1,62 @@
 package dev.amoo.studio
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import io.github.maniramezan.kmpcomponents.EmptyState
+import io.github.maniramezan.kmpcomponents.InlineProgressIndicator
+import io.github.maniramezan.kmpcomponents.KeyValueRow
+import io.github.maniramezan.kmpcomponents.SecondaryButton
+import io.github.maniramezan.kmpcomponents.SectionCard
+import io.github.maniramezan.kmpcomponents.SectionHeader
+import io.github.maniramezan.kmpcomponents.SelectableCard
+import io.github.maniramezan.kmpcomponents.StatusMessage
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeHorizontalDivider
+import io.github.maniramezan.kmpcomponents.TonalBadge
+import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable internal fun ReportsContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val canList = state.connection.supports("reports.list")
 	val selected = state.reports.firstOrNull { it.id == state.selectedReportId }
-	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-			Text("Test reports", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-			Button({ onEvent(StudioEvent.RefreshReports) }, enabled = canList && !state.reportsLoading) { Text("Refresh") }
-		}
-		if (!canList) Text("The connected Amoo version does not advertise reports.list.", color = MaterialTheme.colorScheme.error)
-		if (state.reportsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-		Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-			LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-				if (!state.reportsLoading && state.reports.isEmpty()) item { Text("No reports yet. Run a test to create one.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+		SectionHeader("Test reports", titleStyle = MaterialTheme.typography.titleLarge, actions = {
+			SecondaryButton("Refresh", { onEvent(StudioEvent.RefreshReports) }, enabled = canList && !state.reportsLoading)
+		})
+		if (!canList) StatusMessage("The connected Amoo version does not advertise reports.list.", tone = StatusTone.WARNING)
+		if (state.reportsLoading) InlineProgressIndicator("Loading reports…")
+		Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+			LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+				if (!state.reportsLoading && state.reports.isEmpty()) item(key = "empty") { EmptyState("No reports yet", message = "Run a test to create one.") }
 				items(state.reports, key = { it.id }) { report ->
-					Card(Modifier.fillMaxWidth().clickable { onEvent(StudioEvent.SelectReport(report.id)) }, colors = CardDefaults.cardColors(containerColor = if (report.id == state.selectedReportId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow)) {
-						Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-							Row(Modifier.fillMaxWidth()) { Text(report.testName, Modifier.weight(1f), fontWeight = FontWeight.Bold); ReportStatusLabel(report.status) }
-							Text("${report.startedAt}${report.deviceName.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall)
-						}
+					SelectableCard(report.id == state.selectedReportId, { onEvent(StudioEvent.SelectReport(report.id)) }, Modifier.fillMaxWidth()) {
+						Text(report.testName, style = MaterialTheme.typography.titleMedium)
+						ReportStatusLabel(report.status)
+						Text("${report.startedAt}${report.deviceName.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall)
 					}
 				}
 			}
-			Card(Modifier.weight(0.58f).fillMaxHeight()) {
-				if (selected == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Choose a report") }
-				else Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-					Row(Modifier.fillMaxWidth()) { Text(selected.testName, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); ReportStatusLabel(selected.status) }
+			if (selected == null) EmptyState("Choose a report", Modifier.weight(0.58f))
+			else SectionCard(selected.testName, Modifier.weight(0.58f).fillMaxHeight()) {
+				Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+					ReportStatusLabel(selected.status)
 					Text(selected.summary.ifBlank { "No summary was provided." })
-					selected.durationMillis?.let { Text("Duration: ${it} ms") }
-					Text("Session report ID: ${selected.id}", style = MaterialTheme.typography.bodySmall)
-					if (selected.artifacts.isNotEmpty()) { HorizontalDivider(); Text("Artifacts", style = MaterialTheme.typography.titleMedium); selected.artifacts.forEach { path ->
-						OutlinedButton({ onEvent(StudioEvent.OpenReportArtifact(path)) }) { Text("Open ${path.substringAfterLast('/')}") }
-						Text(path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-					} }
+					selected.durationMillis?.let { KeyValueRow("Duration", "$it ms") }
+					KeyValueRow("Session report ID", selected.id)
+					if (selected.artifacts.isNotEmpty()) {
+						ThemeHorizontalDivider()
+						SectionHeader("Artifacts")
+						selected.artifacts.forEach { path ->
+							SecondaryButton("Open ${path.substringAfterLast('/')}", { onEvent(StudioEvent.OpenReportArtifact(path)) })
+							Text(path, style = MaterialTheme.typography.bodySmall)
+						}
+					}
 				}
 			}
 		}
@@ -54,10 +64,10 @@ import androidx.compose.ui.unit.dp
 }
 
 @Composable private fun ReportStatusLabel(status: ReportStatus) {
-	val color = when (status) {
-		ReportStatus.Passed -> MaterialTheme.colorScheme.primary
-		ReportStatus.Failed -> MaterialTheme.colorScheme.error
-		ReportStatus.Cancelled, ReportStatus.Running -> MaterialTheme.colorScheme.tertiary
-	}
-	Text(status.name, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+	TonalBadge(status.name, tone = when (status) {
+		ReportStatus.Passed -> StatusTone.SUCCESS
+		ReportStatus.Failed -> StatusTone.ERROR
+		ReportStatus.Cancelled -> StatusTone.WARNING
+		ReportStatus.Running -> StatusTone.INFO
+	})
 }

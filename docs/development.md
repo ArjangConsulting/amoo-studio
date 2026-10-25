@@ -16,14 +16,16 @@ AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
 
 ## Local library checkouts
 
-`credential-keychain-kotlin` resolves from Maven Central by default. When a checkout exists next to
-this repository (`../credential-keychain-kotlin`), Gradle includes it as a composite build instead.
-Override the detection with `-PuseLocalCredentialKeychain=true|false`, and point at a different
-checkout with `-PlocalCredentialKeychainPath=<path>`. `process-rpc-kotlin` works the same way with
-`../process-rpc-kotlin`, `-PuseLocalProcessRpc=true|false`, and `-PlocalProcessRpcPath=<path>`.
-`../KMPComponents` is included the same way, with `-PuseLocalKmpComponents=true|false` to override
-the detection, and `../kmp-code-editor` with `-PuseLocalCodeEditor=true|false` and
-`-PlocalCodeEditorPath=<path>`.
+KMPComponents and credential-keychain-kotlin resolve their pinned releases from Maven Central,
+even when sibling checkouts exist. Opt into local development with `-PuseLocalKmpComponents=true`
+or `-PuseLocalCredentialKeychain=true`. Their default paths are `../KMPComponents` and
+`../credential-keychain-kotlin`; override them with `-PlocalKmpComponentsPath=<path>` and
+`-PlocalCredentialKeychainPath=<path>`.
+
+`process-rpc-kotlin` automatically includes a sibling `../process-rpc-kotlin` checkout when present;
+override that with `-PuseLocalProcessRpc=true|false` and `-PlocalProcessRpcPath=<path>`.
+The unpublished `kmp-code-editor` works the same way with `../kmp-code-editor`,
+`-PuseLocalCodeEditor=true|false`, and `-PlocalCodeEditorPath=<path>`.
 
 Without `AMOO_BINARY`, Studio searches packaged application resources and then `PATH`. An unavailable
 backend is represented in UI state and must never crash the desktop process.
@@ -46,9 +48,47 @@ operations on either host.
 
 ## Verification
 
+KMPComponents is pinned to `0.2.0`, and provider API keys use credential-keychain-kotlin `0.1.1`.
+Their versions are managed in `gradle/libs.versions.toml`. API keys stay in the OS keychain;
+provider preferences contain only profile metadata. Keychain access runs on a serialized IO dispatcher.
+
+The shared UI uses KMPComponents for navigation, confirmation dialogs, pane splitting, screenshot
+zoom, provider configuration and secret visibility, theme selection, selection cards, notices,
+disclosures, progress, buttons, and form fields. Conversation rendering uses `ChatLog` and
+`ChatComposer`; agent execution details have their own Run activity segment. Provider drafts live in
+`StudioState`, and shared controls emit `StudioEvent` actions. Generated source copying uses
+`CopyButton` for clipboard feedback. App-specific code retains protocol readiness, approvals,
+tool timelines, syntax-aware editors, screenshot loading, and coordinate conversion.
+Generated-test panes use shared splitters with layout state in `StudioState`; unreadable screenshots
+show a shared error state. Material 3 is supplied by KMPComponents' public dependency contract.
+Narrow windows and enlarged text switch generated-test panes to shared Steps / Source / Screenshot
+segments. Code editors retain left-to-right source ordering inside right-to-left application layouts.
+Device creation keeps its custom form dialog because the shared `ThemeDialog` accepts text content.
+
+The keychain retains the existing `amoo-studio` service/account namespace. Its desktop OS-command
+timeout is 60 seconds to allow access prompts. Failures are mapped from the library's reason enum
+to remediation without displaying raw diagnostics. Read failures block edits and replacement saves;
+read, write, and deletion failures have explicit retry actions in Settings. API keys preserve their
+exact value, including surrounding whitespace. Blank keys delete only that profile's entry.
+
+Desktop tests use the published KotlinTestCommons `0.1.0` `core` and `compose` artifacts for temporary
+directories, bounded flow observation, scripted responders, event recording, serialization checks,
+and UI waits, input verification, target-size assertions, and PNG capture. These dependencies are
+limited to `desktopTest`.
+
+`SharedComponentsUiTest` covers form validation, credential recovery, composer keyboard behavior,
+approvals, accessible split adjustment, and keyboard zoom. It also renders all eight screens in
+light, dark, and 200% RTL configurations, writing PNGs under `composeApp/build/reports/ui-integration`.
+
 ```bash
 ./gradlew :composeApp:desktopTest
 ./gradlew :composeApp:compileKotlinDesktop
+```
+
+To verify the released UI and keychain artifacts without substituting sibling checkouts:
+
+```bash
+./gradlew :composeApp:desktopTest :composeApp:compileKotlinDesktop -PuseLocalKmpComponents=false -PuseLocalCredentialKeychain=false
 ```
 
 CI intentionally does not require a simulator or emulator. Before a release, exercise the real local

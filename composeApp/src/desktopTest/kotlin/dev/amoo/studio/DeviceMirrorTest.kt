@@ -9,8 +9,12 @@ import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.io.path.createTempDirectory
+import io.github.maniramezan.testcommons.TemporaryDirectory
+import io.github.maniramezan.testcommons.CallRecorder
+import io.github.maniramezan.testcommons.FlowObservation
+import io.github.maniramezan.testcommons.observeFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,20 +27,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Surface
 
 class DeviceMirrorTest {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-	private val scratch = createTempDirectory("mirror-test").toFile()
+	private val directory = TemporaryDirectory(prefix = "mirror-test")
+	private val scratch = directory.file
 	private val device = StudioDevice("sim-1", "iPhone 17", TestPlatform.Ios, "26", DeviceStatus.Running)
 
 	@AfterTest
 	fun tearDown() {
 		scope.cancel()
-		scratch.deleteRecursively()
+		directory.remove()
 	}
 
 	// MARK: State
@@ -137,7 +141,7 @@ class DeviceMirrorTest {
 
 		val unavailable = events.receiveUntil<StudioEvent.MirrorUnavailable>()
 		assertTrue(unavailable.reason.contains("newer Amoo"))
-		assertEquals(1, launcher.launches.get())
+		assertEquals(1, launcher.calls.count)
 		mirror.close()
 	}
 
@@ -151,27 +155,27 @@ class DeviceMirrorTest {
 
 		assertEquals("simctl failed", events.receiveUntil<StudioEvent.MirrorReconnecting>().reason)
 		events.receiveUntil<StudioEvent.MirrorReconnecting>()
-		assertTrue(launcher.launches.get() >= 2)
+		assertTrue(launcher.calls.count >= 2)
 		mirror.close()
 	}
 
 	@Test
 	fun `stopping or switching devices destroys the running process`() = runBlocking<Unit> {
 		val events = Channel<StudioEvent>(Channel.UNLIMITED)
-		val processes = mutableListOf<FakeProcess>()
-		val launcher = ScriptedLauncher { OpenEndedProcess().also { synchronized(processes) { processes += it } } }
+		val processes = CallRecorder<FakeProcess>()
+		val launcher = ScriptedLauncher { OpenEndedProcess().also { processes.record(it) } }
 		val mirror = DeviceMirror(scope, launcher, onEvent = { events.send(it) }, backoffMillis = { 60_000 })
 
 		mirror.update(device)
 		events.receiveUntil<StudioEvent.MirrorStarting>()
-		waitUntil { synchronized(processes) { processes.size == 1 } }
+		processes.waitForCalls(1, 5.seconds)
 		mirror.update(device.copy(id = "sim-2"))
-		assertTrue(synchronized(processes) { processes[0] }.destroyed.await(5, TimeUnit.SECONDS))
+		assertTrue(processes.values()[0].destroyed.await(5, TimeUnit.SECONDS))
 		assertEquals("sim-2", events.receiveUntil<StudioEvent.MirrorStarting> { it.deviceId == "sim-2" }.deviceId)
 
-		waitUntil { synchronized(processes) { processes.size == 2 } }
+		processes.waitForCalls(2, 5.seconds)
 		mirror.update(null)
-		assertTrue(synchronized(processes) { processes[1] }.destroyed.await(5, TimeUnit.SECONDS))
+		assertTrue(processes.values()[1].destroyed.await(5, TimeUnit.SECONDS))
 		events.receiveUntil<StudioEvent.MirrorStopped>()
 	}
 
@@ -213,28 +217,20 @@ class DeviceMirrorTest {
 	private fun lines(vararg events: String): InputStream =
 		ByteArrayInputStream(events.joinToString("\n") { if (it == "started") """{"event":"started","directory":"/tmp"}""" else it }.plus("\n").toByteArray())
 
-	private suspend fun Channel<StudioEvent>.receiveWithin(): StudioEvent = withTimeout(5_000) { receive() }
+	private suspend fun Channel<StudioEvent>.receiveWithin(): StudioEvent = receiveUntil<StudioEvent>()
 
-	private suspend inline fun <reified T : StudioEvent> Channel<StudioEvent>.receiveUntil(crossinline matches: (T) -> Boolean = { true }): T =
-		withTimeout(5_000) {
-			while (true) {
-				val event = receive()
-				if (event is T && matches(event)) return@withTimeout event
-			}
-			@Suppress("UNREACHABLE_CODE") error("unreachable")
-		}
-
-	private suspend fun waitUntil(condition: () -> Boolean) = withTimeout(5_000) {
-		while (!condition()) kotlinx.coroutines.delay(10)
+	private suspend inline fun <reified T : StudioEvent> Channel<StudioEvent>.receiveUntil(crossinline matches: (T) -> Boolean = { true }): T {
+		val observation = observeFlow(receiveAsFlow(), maxCount = 100, timeout = 5.seconds) { it is T && matches(it) }
+		assertEquals(FlowObservation.End.Matched, observation.end, "Expected ${T::class.simpleName}, observed ${observation.values}")
+		return observation.values.last() as T
 	}
 
 	private class ScriptedLauncher(private val next: () -> StreamProcess) : StreamLauncher {
-		val launches = AtomicInteger()
-		val arguments = mutableListOf<List<String>>()
+		val calls = CallRecorder<List<String>>()
+		val arguments: List<List<String>> get() = calls.values()
 
 		override fun launch(arguments: List<String>): StreamProcess {
-			launches.incrementAndGet()
-			synchronized(this.arguments) { this.arguments += arguments }
+			calls.record(arguments)
 			return next()
 		}
 	}

@@ -30,8 +30,7 @@ kotlin {
 			dependencies {
 				implementation(libs.compose.runtime)
 				implementation(libs.compose.foundation)
-				implementation(compose.material3)
-				implementation(compose.components.resources)
+				implementation(libs.compose.resources)
 				implementation(libs.compose.ui)
 				implementation(libs.kmp.components)
 				implementation(libs.kmp.code.editor)
@@ -42,7 +41,7 @@ kotlin {
 		named("desktopMain") {
 			dependencies {
 				implementation("com.github.maniramezan:process-rpc-kotlin:0.2.0")
-				implementation("io.github.maniramezan:credential-keychain-kotlin:0.1.1")
+				implementation(libs.credential.keychain)
 				implementation(compose.desktop.currentOs)
 				implementation(libs.coroutines.swing)
 			}
@@ -51,6 +50,8 @@ kotlin {
 			dependencies {
 				implementation(kotlin("test"))
 				implementation(libs.compose.ui.test)
+				implementation(libs.testcommons.core)
+				implementation(libs.testcommons.compose)
 			}
 		}
 	}

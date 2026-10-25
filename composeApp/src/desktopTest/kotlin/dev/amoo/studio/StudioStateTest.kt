@@ -1,5 +1,6 @@
 package dev.amoo.studio
 
+import io.github.maniramezan.testcommons.roundTrip
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -244,7 +245,7 @@ class StudioStateTest {
 	fun `editing a provider replaces it in place and closes the editor`() {
 		val first = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5")
 		val second = ProviderProfile("b", "B", ProviderKind.Ollama, "http://localhost:11434", "qwen")
-		val editing = StudioState(providers = listOf(first, second)).reduce(StudioEvent.EditProvider("a"))
+		val editing = StudioState(providers = listOf(first, second), providerApiKeysLoaded = true).reduce(StudioEvent.EditProvider("a"))
 		assertEquals("a", editing.editingProviderId)
 
 		val saved = editing.reduce(StudioEvent.SaveProvider(first.copy(name = "Renamed", apiKey = Secret("sk-new"))))
@@ -257,7 +258,7 @@ class StudioStateTest {
 	@Test
 	fun `editing ignores unknown providers and removing the edited provider closes the editor`() {
 		val provider = ProviderProfile("a", "A", ProviderKind.OpenAI, "https://api.openai.com/v1", "gpt-5")
-		val state = StudioState(providers = listOf(provider))
+		val state = StudioState(providers = listOf(provider), providerApiKeysLoaded = true)
 
 		assertEquals(null, state.reduce(StudioEvent.EditProvider("missing")).editingProviderId)
 		assertEquals(null, state.reduce(StudioEvent.EditProvider("a")).reduce(StudioEvent.RemoveProvider("a")).editingProviderId)
@@ -454,7 +455,7 @@ class StudioStateTest {
 			),
 		)
 
-		assertEquals(expected, Json.decodeFromString<AmooTest>(Json.encodeToString(expected)))
+		assertEquals(expected, roundTrip(expected, { Json.encodeToString(it) }, { Json.decodeFromString<AmooTest>(it) }))
 	}
 
 	@Test
@@ -493,4 +494,77 @@ class StudioStateTest {
 		assertEquals(null, updated.createDevice)
 		assertEquals(DeviceOperation.Working("Creating device…"), updated.deviceOperation)
 	}
+	@Test
+	fun `provider drafts survive section changes and cancel restores an empty draft`() {
+		val draft = newProviderDraft().copy(name = "Work", model = "model", apiKey = Secret("private"))
+		val edited = StudioState().reduce(StudioEvent.ChangeProviderDraft(draft)).reduce(StudioEvent.SelectSection(StudioSection.Console))
+
+		assertEquals(draft, edited.providerDraft)
+		assertEquals(newProviderDraft(), edited.reduce(StudioEvent.CancelProviderEdit).providerDraft)
+		assertTrue("private" !in edited.toString())
+	}
+
+	@Test
+	fun `unread keys cannot be overwritten by editing or re-adding a profile`() {
+		val profile = newProviderDraft().copy(id = "a", name = "A", model = "model")
+		val initial = StudioState(providers = listOf(profile))
+		val failed = initial.reduce(StudioEvent.ProviderApiKeysLoaded(emptyMap(), mapOf("a" to "Locked")))
+
+		assertEquals(null, initial.reduce(StudioEvent.EditProvider("a")).editingProviderId)
+		assertEquals(null, failed.reduce(StudioEvent.EditProvider("a")).editingProviderId)
+		assertEquals(listOf(profile), failed.reduce(StudioEvent.SaveProvider(profile.copy(name = "Changed"))).providers)
+		assertEquals(listOf(profile), initial.reduce(StudioEvent.SaveProvider(profile.copy(apiKey = Secret("replacement")))).providers)
+	}
+
+	@Test
+	fun `explicit keychain retry unlocks editing only after a successful read`() {
+		val profile = newProviderDraft().copy(id = "a", name = "A", model = "model")
+		val failed = StudioState(providers = listOf(profile)).reduce(StudioEvent.ProviderApiKeysLoaded(emptyMap(), mapOf("a" to "Canceled")))
+		val retrying = failed.reduce(StudioEvent.RetryProviderApiKeys)
+		val recovered = retrying.reduce(StudioEvent.ProviderApiKeysLoaded(mapOf("a" to Secret("stored-key")))).reduce(StudioEvent.EditProvider("a"))
+
+		assertEquals(false, retrying.providerApiKeysLoaded)
+		assertEquals("a", recovered.editingProviderId)
+		assertEquals(Secret("stored-key"), recovered.providerDraft.apiKey)
+		assertEquals(emptyMap(), recovered.providerApiKeyReadFailures)
+	}
+
+	@Test
+	fun `failed keychain saves remain visible until an explicit retry succeeds`() {
+		val profile = newProviderDraft().copy(id = "a", name = "A", model = "model", apiKey = Secret("private"))
+		val saving = StudioState(providers = emptyList()).reduce(StudioEvent.SaveProvider(profile))
+		val failed = saving.reduce(StudioEvent.ProviderApiKeySaveFinished("a", "Locked"))
+		val retrying = failed.reduce(StudioEvent.RetryProviderApiKeySave("a"))
+		val saved = retrying.reduce(StudioEvent.ProviderApiKeySaveFinished("a"))
+
+		assertEquals(setOf("a"), saving.providerApiKeysSaving)
+		assertEquals(mapOf("a" to "Locked"), failed.providerApiKeySaveFailures)
+		assertEquals(Secret("private"), failed.providers.single().apiKey)
+		assertEquals(setOf("a"), retrying.providerApiKeysSaving)
+		assertEquals(emptyMap(), saved.providerApiKeySaveFailures)
+		assertEquals(emptySet(), saved.providerApiKeysSaving)
+	}
+
+	@Test
+	fun `failed keychain deletion can be retried after the provider was removed`() {
+		val removed = StudioState(providers = listOf(newProviderDraft().copy(id = "a")))
+			.reduce(StudioEvent.RemoveProvider("a"))
+			.reduce(StudioEvent.ProviderApiKeyDeleteFinished("a", "Locked"))
+		val deleted = removed.reduce(StudioEvent.RetryProviderApiKeyDelete("a")).reduce(StudioEvent.ProviderApiKeyDeleteFinished("a"))
+
+		assertEquals(emptyList(), removed.providers)
+		assertEquals(mapOf("a" to "Locked"), removed.providerApiKeyDeletionFailures)
+		assertEquals(emptyMap(), deleted.providerApiKeyDeletionFailures)
+	}
+
+	@Test
+	fun `an in-flight keychain write cannot be replaced by another save`() {
+		val profile = newProviderDraft().copy(id = "a", name = "A", model = "model", apiKey = Secret("first"))
+		val saving = StudioState(providers = emptyList()).reduce(StudioEvent.SaveProvider(profile))
+		val duplicate = saving.reduce(StudioEvent.SaveProvider(profile.copy(apiKey = Secret("second"))))
+
+		assertEquals(Secret("first"), duplicate.providers.single().apiKey)
+		assertEquals(setOf("a"), duplicate.providerApiKeysSaving)
+	}
+
 }

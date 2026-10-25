@@ -3,81 +3,90 @@ package dev.amoo.studio
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.key
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.maniramezan.kmpcomponents.ContentRow
+import io.github.maniramezan.kmpcomponents.EmptyState
+import io.github.maniramezan.kmpcomponents.FlowLayout
+import io.github.maniramezan.kmpcomponents.FormTextField
+import io.github.maniramezan.kmpcomponents.MenuPicker
+import io.github.maniramezan.kmpcomponents.PillChip
+import io.github.maniramezan.kmpcomponents.PrimaryButton
+import io.github.maniramezan.kmpcomponents.ProgressIndicator
+import io.github.maniramezan.kmpcomponents.SecondaryButton
+import io.github.maniramezan.kmpcomponents.SectionCard
+import io.github.maniramezan.kmpcomponents.SectionHeader
+import io.github.maniramezan.kmpcomponents.StatusMessage
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeHorizontalDivider
+import io.github.maniramezan.kmpcomponents.ThemeSingleChoiceSegmentedButtonRow
+import io.github.maniramezan.kmpcomponents.ThemeTextButton
+import io.github.maniramezan.kmpcomponents.focusNextOnTab
+import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable internal fun TestEditor(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val plan = state.test.compiledPlan
 	val hasExecutablePlan = plan?.toolOperations?.isNotEmpty() == true || plan?.operations?.isNotEmpty() == true
 	val backendSupportsPlan = if (plan?.toolOperations?.isNotEmpty() == true) state.connection.supports("tests.start") else state.connection.supports("tests.run")
 	val canRun = backendSupportsPlan && state.selectedDeviceId != null && state.test.steps.any { it.instruction.isNotBlank() } && hasExecutablePlan
-	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-		Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-			Button({ onEvent(StudioEvent.NewTest) }) { Text("New") }
-			OutlinedButton({ onEvent(StudioEvent.OpenTest) }) { Text("Open…") }
-			Button({ onEvent(StudioEvent.SaveTest) }) { Text("Save") }
-			OutlinedButton({ onEvent(StudioEvent.SaveTestAs) }) { Text("Save as…") }
-			if (state.testExecution is TestExecution.Running) OutlinedButton({ onEvent(StudioEvent.CancelTestRun) }) { Text("Cancel run") }
-			else Button({ onEvent(StudioEvent.RunTest) }, enabled = canRun) { Text("Run test") }
+	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium)) {
+		FlowLayout {
+			PrimaryButton("New", { onEvent(StudioEvent.NewTest) })
+			SecondaryButton("Open…", { onEvent(StudioEvent.OpenTest) })
+			PrimaryButton("Save", { onEvent(StudioEvent.SaveTest) })
+			SecondaryButton("Save as…", { onEvent(StudioEvent.SaveTestAs) })
+			if (state.testExecution is TestExecution.Running) SecondaryButton("Cancel run", { onEvent(StudioEvent.CancelTestRun) })
+			else PrimaryButton("Run test", { onEvent(StudioEvent.RunTest) }, enabled = canRun)
 			val canExport = plan?.toolOperations?.isNotEmpty() == true && state.connection.supports("tests.export") && !state.testExportInProgress
 			if (state.connection.supports(TESTS_GENERATE_CAPABILITY)) {
-				OutlinedButton({ onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = plan?.toolOperations?.isNotEmpty() == true) { Text("Generate test") }
+				SecondaryButton("Generate test", { onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = plan?.toolOperations?.isNotEmpty() == true)
 			} else {
-				OutlinedButton({ onEvent(StudioEvent.ExportTest) }, enabled = canExport) { Text(if (state.testExportInProgress) "Exporting…" else "Export test") }
+				SecondaryButton(if (state.testExportInProgress) "Exporting…" else "Export test", { onEvent(StudioEvent.ExportTest) }, enabled = canExport)
 			}
 			Text((state.testPath ?: "Not saved") + if (state.isTestDirty) " • Modified" else "", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
-		if (!state.connection.supports("tests.run")) Text("Test execution requires the tests.run capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-		else if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports("tests.start")) Text("Typed mobile plans require a newer Amoo with tests.start support.", color = MaterialTheme.colorScheme.error)
-		else if (state.selectedDeviceId == null) Text("Choose a device before running this test.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-		if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports("tests.export")) Text("Exporting native test code requires the tests.export capability from Amoo.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		val runRequirement = when {
+			state.connection !is ConnectionState.Ready -> "Connect to Amoo before running this test."
+			!backendSupportsPlan -> "Update Amoo to run this test's execution plan."
+			state.selectedDeviceId == null -> "Choose a device before running this test."
+			else -> null
+		}
+		runRequirement?.let { StatusMessage(it, tone = StatusTone.INFO) }
+		if (plan?.toolOperations?.isNotEmpty() == true && !state.connection.supports(TESTS_GENERATE_CAPABILITY) && !state.connection.supports("tests.export")) StatusMessage("Update Amoo to export native test code.", tone = StatusTone.WARNING)
 		if (state.testExecution is TestExecution.Running) {
 			val execution = state.testExecution
-			if (execution.totalOperations > 0) LinearProgressIndicator({ execution.currentOperation.toFloat() / execution.totalOperations }, Modifier.fillMaxWidth())
-			else LinearProgressIndicator(Modifier.fillMaxWidth())
-			Text(execution.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+			ProgressIndicator(execution.message, Modifier.fillMaxWidth(), progress = if (execution.totalOperations > 0) execution.currentOperation.toFloat() / execution.totalOperations else null)
 		}
-		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-			OutlinedTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = { Text("Test name") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
-			OutlinedTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = { Text("What does this test cover?") }, minLines = 2, modifier = Modifier.fillMaxWidth().focusNextOnTab())
-			Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium)) {
+			FormTextField(state.test.name, { onEvent(StudioEvent.ChangeTestName(it)) }, label = "Test name", modifier = Modifier.fillMaxWidth().focusNextOnTab())
+			FormTextField(state.test.description, { onEvent(StudioEvent.ChangeTestDescription(it)) }, label = "What does this test cover?", modifier = Modifier.fillMaxWidth().focusNextOnTab(), singleLine = false)
+			FlowLayout {
 				Text("Platform", fontWeight = FontWeight.Medium)
-				TestPlatform.entries.filter(state.hostPlatform::supports).forEach { platform -> FilterChip(state.test.platform == platform, { onEvent(StudioEvent.ChangeTestPlatform(platform)) }, { Text(platform.label) }) }
+				val platforms = TestPlatform.entries.filter(state.hostPlatform::supports)
+				ThemeSingleChoiceSegmentedButtonRow(platforms.map { it.label }, platforms.indexOf(state.test.platform), { onEvent(StudioEvent.ChangeTestPlatform(platforms[it])) })
 			}
-			Text("Steps", style = MaterialTheme.typography.titleLarge)
+			SectionHeader("Steps", titleStyle = MaterialTheme.typography.titleLarge)
 			state.test.steps.forEachIndexed { index, step -> key(step.id) { StepCard(index, step, state.test.steps.size > 1, onEvent) } }
-			OutlinedButton({ onEvent(StudioEvent.AddTestStep) }) { Text("Add step") }
-			HorizontalDivider()
-			Text("Execution plan", style = MaterialTheme.typography.titleLarge)
+			SecondaryButton("Add step", { onEvent(StudioEvent.AddTestStep) })
+			ThemeHorizontalDivider()
+			SectionHeader("Execution plan", titleStyle = MaterialTheme.typography.titleLarge)
 			Text("Add verified Amoo actions and assertions. Authored steps remain the source of truth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
 			ToolOperationEditor(state.operationDraft, state.toolCatalog, onEvent)
 			val toolOperations = plan?.toolOperations.orEmpty()
-			if (toolOperations.isEmpty() && plan?.operations.isNullOrEmpty()) Text("Add at least one action or assertion before running this test.", color = MaterialTheme.colorScheme.error)
+			if (toolOperations.isEmpty() && plan?.operations.isNullOrEmpty()) EmptyState("No executable actions yet", message = "Add at least one action or assertion before running this test.")
 			toolOperations.forEachIndexed { index, operation -> key(operation.id) {
-				Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-					Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-						Column(Modifier.weight(1f)) {
-							Text("${index + 1}. ${operation.tool}", fontWeight = FontWeight.SemiBold)
-							if (operation.arguments.isNotEmpty()) Text(operation.arguments.entries.joinToString(" · ") { "${it.key}=${it.value}" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-						}
-						TextButton({ onEvent(StudioEvent.RemoveToolOperation(operation.id)) }) { Text("Remove") }
-					}
-				}
+				ContentRow("${index + 1}. ${operation.tool}", supportingText = operation.arguments.takeIf { it.isNotEmpty() }?.entries?.joinToString(" · ") { "${it.key}=${it.value}" }, trailingContent = {
+					ThemeTextButton("Remove", { onEvent(StudioEvent.RemoveToolOperation(operation.id)) }, destructive = true)
+				})
 			} }
 			val operations = plan?.operations.orEmpty()
-			if (operations.isNotEmpty()) Text("Legacy console operations", style = MaterialTheme.typography.titleMedium)
+			if (operations.isNotEmpty()) SectionHeader("Legacy console operations")
 			operations.forEachIndexed { index, operation -> key("plan-$index-$operation") {
-				Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-					Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-						Text("${index + 1}. $operation", Modifier.weight(1f))
-						TextButton({ onEvent(StudioEvent.RemoveTestPlanOperation(index)) }) { Text("Remove") }
-					}
-				}
+				ContentRow("${index + 1}. $operation", trailingContent = { ThemeTextButton("Remove", { onEvent(StudioEvent.RemoveTestPlanOperation(index)) }, destructive = true) })
 			} }
 			Spacer(Modifier.height(16.dp))
 		}
@@ -86,29 +95,16 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 private fun ToolOperationEditor(draft: ToolOperationDraft, catalog: ToolCatalog, onEvent: (StudioEvent) -> Unit) {
-	var expanded by remember { mutableStateOf(false) }
 	val tools = catalog.planTools
 	val definition = catalog.tool(draft.tool) ?: tools.firstOrNull() ?: return
-	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-			Text("Add operation", style = MaterialTheme.typography.titleMedium)
-			Box {
-				OutlinedButton({ expanded = true }) { Text(definition.name) }
-				DropdownMenu(expanded, { expanded = false }) {
-					tools.forEach { tool -> DropdownMenuItem(
-						text = { Column { Text(tool.name); Text(tool.description, style = MaterialTheme.typography.bodySmall, maxLines = 2) } },
-						onClick = { expanded = false; onEvent(StudioEvent.ChangeToolOperationType(tool.name)) },
-					) }
-				}
-			}
-			Text(definition.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
-			definition.arguments.forEach { argument -> key(argument.name) { ToolArgumentField(argument, draft.arguments[argument.name].orEmpty(), onEvent) } }
-			val validationError = draft.validationError(catalog)
-			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-				validationError?.let { Text(it, Modifier.weight(1f), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-				Button({ onEvent(StudioEvent.AddToolOperation) }, enabled = validationError == null) { Text("Add operation") }
-			}
-		}
+	val validationError = draft.validationError(catalog)
+	SectionCard("New operation", Modifier.fillMaxWidth(), action = {
+		PrimaryButton("Add operation", { onEvent(StudioEvent.AddToolOperation) }, enabled = validationError == null)
+	}) {
+		MenuPicker(tools, definition, { onEvent(StudioEvent.ChangeToolOperationType(it.name)) }, "Operation", { it.name }, Modifier.fillMaxWidth())
+		Text(definition.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+		definition.arguments.forEach { argument -> key(argument.name) { ToolArgumentField(argument, draft.arguments[argument.name].orEmpty(), onEvent) } }
+		validationError?.let { StatusMessage(it, tone = StatusTone.ERROR) }
 	}
 }
 
@@ -118,21 +114,21 @@ private fun ToolArgumentField(argument: ToolArgumentSchema, value: String, onEve
 	val label = argument.name + if (argument.required) " *" else ""
 	val values = argument.values.orEmpty()
 	if (argument.valuesAreExhaustive && values.isNotEmpty()) {
-		Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+		Column(verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.extraSmall)) {
 			Text(label, style = MaterialTheme.typography.labelLarge)
-			Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+			FlowLayout {
 				values.forEach { option ->
-					FilterChip(value.equals(option, ignoreCase = true), { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, if (value == option) "" else option)) }, { Text(option) })
+					PillChip(option, value.equals(option, ignoreCase = true), onClick = { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, if (value.equals(option, ignoreCase = true)) "" else option)) })
 				}
 			}
 		}
 	} else {
-		OutlinedTextField(
+		FormTextField(
 			value = value,
 			onValueChange = { onEvent(StudioEvent.ChangeToolOperationArgument(argument.name, it)) },
-			label = { Text(label) },
-			placeholder = values.takeIf { it.isNotEmpty() }?.let { { Text(it.joinToString(", ")) } },
-			supportingText = argument.description.takeIf(String::isNotBlank)?.let { { Text(it, maxLines = 2) } },
+			label = label,
+			placeholder = values.takeIf { it.isNotEmpty() }?.joinToString(", "),
+			supportingText = argument.description.takeIf(String::isNotBlank),
 			singleLine = true,
 			modifier = Modifier.fillMaxWidth().focusNextOnTab(),
 		)
@@ -140,14 +136,10 @@ private fun ToolArgumentField(argument: ToolArgumentSchema, value: String, onEve
 }
 
 @Composable private fun StepCard(index: Int, step: TestStep, canRemove: Boolean, onEvent: (StudioEvent) -> Unit) {
-	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-			Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-				Text("Step ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-				if (canRemove) TextButton({ onEvent(StudioEvent.RemoveTestStep(step.id)) }) { Text("Remove") }
-			}
-			OutlinedTextField(step.instruction, { onEvent(StudioEvent.ChangeTestStep(step.id, instruction = it)) }, label = { Text("Action or instruction") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
-			OutlinedTextField(step.expected, { onEvent(StudioEvent.ChangeTestStep(step.id, expected = it)) }, label = { Text("Expected result") }, modifier = Modifier.fillMaxWidth().focusNextOnTab())
-		}
+	SectionCard("Step ${index + 1}", Modifier.fillMaxWidth(), action = {
+		if (canRemove) ThemeTextButton("Remove", { onEvent(StudioEvent.RemoveTestStep(step.id)) }, destructive = true)
+	}) {
+		FormTextField(step.instruction, { onEvent(StudioEvent.ChangeTestStep(step.id, instruction = it)) }, "Action or instruction", modifier = Modifier.fillMaxWidth().focusNextOnTab(), singleLine = false)
+		FormTextField(step.expected, { onEvent(StudioEvent.ChangeTestStep(step.id, expected = it)) }, "Expected result", modifier = Modifier.fillMaxWidth().focusNextOnTab(), singleLine = false)
 	}
 }

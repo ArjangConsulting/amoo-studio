@@ -3,7 +3,7 @@ package dev.amoo.studio
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
-import kotlin.io.path.createTempDirectory
+import io.github.maniramezan.testcommons.TemporaryDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,13 +13,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AmooRuntimeInstallerTest {
-	private val scratch = createTempDirectory("amoo-runtime-test").toFile()
+	private val directory = TemporaryDirectory(prefix = "amoo-runtime-test")
+	private val scratch = directory.file
 	private val resources = File(scratch, "resources").apply { mkdirs() }
 	private val runtimeRoot = File(scratch, "runtime")
 
 	@AfterTest
 	fun tearDown() {
-		scratch.deleteRecursively()
+		directory.remove()
 	}
 
 	@Test

@@ -1,15 +1,16 @@
 package dev.amoo.studio
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -24,28 +25,77 @@ import com.arjangconsulting.codeeditor.PlainText
 import com.arjangconsulting.codeeditor.SwiftRules
 import com.arjangconsulting.codeeditor.TextPosition
 import com.arjangconsulting.codeeditor.TextRange as EditorRange
+import io.github.maniramezan.kmpcomponents.CopyButton
+import io.github.maniramezan.kmpcomponents.EmptyState
+import io.github.maniramezan.kmpcomponents.FlowLayout
+import io.github.maniramezan.kmpcomponents.FormTextField
+import io.github.maniramezan.kmpcomponents.HorizontalSplitPane
+import io.github.maniramezan.kmpcomponents.LoadingState
+import io.github.maniramezan.kmpcomponents.NoticeCard
+import io.github.maniramezan.kmpcomponents.PrimaryButton
+import io.github.maniramezan.kmpcomponents.SecondaryButton
+import io.github.maniramezan.kmpcomponents.SectionHeader
+import io.github.maniramezan.kmpcomponents.SelectableCard
+import io.github.maniramezan.kmpcomponents.SegmentedContent
+import io.github.maniramezan.kmpcomponents.SegmentedItem
+import io.github.maniramezan.kmpcomponents.SplitPaneLabels
+import io.github.maniramezan.kmpcomponents.StatusMessage
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeCard
+import io.github.maniramezan.kmpcomponents.ThemeSingleChoiceSegmentedButtonRow
+import io.github.maniramezan.kmpcomponents.focusNextOnTab
+import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 /** Generated native test source beside the plan it came from and each step's screenshot. */
 @Composable internal fun GeneratedTestContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val generated = state.generatedTest
 	if (generated == null) {
-		Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-			Text("Nothing generated yet.", style = MaterialTheme.typography.titleMedium)
-			Text("Generate a test from a finished agent run in AI testing, a console recording, or the test open in Tests.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-			Button({ onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = state.connection.supports(TESTS_GENERATE_CAPABILITY)) { Text("Generate from ${state.test.name}") }
-		}
+		EmptyState("Nothing generated yet.", message = "Generate a test from a finished agent run in AI testing, a console recording, or the test open in Tests.", action = {
+			PrimaryButton("Generate from ${state.test.name}", { onEvent(StudioEvent.GenerateTest(GenerationSource.AuthoredTest)) }, enabled = state.connection.supports(TESTS_GENERATE_CAPABILITY))
+		})
 		return
 	}
-	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium)) {
 		GenerationToolbar(generated, state.test.platform, onEvent)
 		when {
-			generated.loading -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+			generated.loading -> LoadingState("Generating native test…", Modifier.fillMaxWidth().weight(1f))
 			generated.problem != null -> GenerationProblemView(generated.problem, onEvent, Modifier.weight(1f))
-			generated.generated != null -> Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-				OperationList(generated, onEvent, Modifier.width(260.dp).fillMaxHeight())
-				GeneratedSourceView(generated, generated.generated, onEvent, Modifier.weight(1f).fillMaxHeight())
-				StepScreenshot(generated, Modifier.width(240.dp).fillMaxHeight())
+			generated.generated != null -> GeneratedPanes(generated, generated.generated, onEvent, Modifier.fillMaxWidth().weight(1f))
+		}
+	}
+}
+
+@Composable private fun GeneratedPanes(generated: GeneratedTestState, source: GeneratedSource, onEvent: (StudioEvent) -> Unit, modifier: Modifier) {
+	val steps: @Composable () -> Unit = { OperationList(generated, onEvent, Modifier.fillMaxSize()) }
+	val code: @Composable () -> Unit = { GeneratedSourceView(generated, source, onEvent, Modifier.fillMaxSize()) }
+	val screenshot: @Composable () -> Unit = { StepScreenshot(generated, Modifier.fillMaxSize()) }
+	BoxWithConstraints(modifier) {
+		if (maxWidth < 900.dp * LocalDensity.current.fontScale) {
+			SegmentedContent(listOf(SegmentedItem("Steps"), SegmentedItem("Source"), SegmentedItem("Screenshot")), modifier = Modifier.fillMaxSize(), initialSelectedIndex = 1) { index, _ ->
+				when (index) {
+					0 -> steps()
+					1 -> code()
+					else -> screenshot()
+				}
 			}
+		} else {
+			HorizontalSplitPane(
+				split = generated.operationsSplit,
+				onSplitChange = { onEvent(StudioEvent.ChangeGeneratedTestLayout(operationsSplit = it)) },
+				modifier = Modifier.fillMaxSize(),
+				labels = SplitPaneLabels(handleDescription = "Resize generated steps"),
+				leading = steps,
+				trailing = {
+					HorizontalSplitPane(
+						split = generated.sourceSplit,
+						onSplitChange = { onEvent(StudioEvent.ChangeGeneratedTestLayout(sourceSplit = it)) },
+						modifier = Modifier.fillMaxSize(),
+						labels = SplitPaneLabels(handleDescription = "Resize generated source"),
+						leading = code,
+						trailing = screenshot,
+					)
+				},
+			)
 		}
 	}
 }
@@ -53,8 +103,8 @@ import com.arjangconsulting.codeeditor.TextRange as EditorRange
 const val TESTS_GENERATE_CAPABILITY = "tests.generate"
 
 @Composable private fun GenerationToolbar(generated: GeneratedTestState, platform: TestPlatform, onEvent: (StudioEvent) -> Unit) {
-	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-		Column(Modifier.weight(1f)) {
+	FlowLayout(Modifier.fillMaxWidth()) {
+		Column(Modifier.widthIn(min = 200.dp, max = 400.dp)) {
 			Text(generated.generated?.fileName ?: "Generating…", style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
 			Text(
 				when (val source = generated.source) {
@@ -65,70 +115,48 @@ const val TESTS_GENERATE_CAPABILITY = "tests.generate"
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
-		OutlinedTextField(
+		FormTextField(
 			generated.testName,
 			{ onEvent(StudioEvent.ChangeGeneratedTestOptions(testName = it)) },
-			label = { Text("Test name") },
+			label = "Test name",
 			singleLine = true,
 			modifier = Modifier.width(220.dp).focusNextOnTab(),
 		)
 		if (platform == TestPlatform.Android) {
-			UiToolkit.entries.forEach { toolkit ->
-				FilterChip(generated.uiToolkit == toolkit, { onEvent(StudioEvent.ChangeGeneratedTestOptions(uiToolkit = toolkit)) }, { Text(toolkit.label) })
-			}
+			ThemeSingleChoiceSegmentedButtonRow(UiToolkit.entries.map { it.label }, UiToolkit.entries.indexOf(generated.uiToolkit), { onEvent(StudioEvent.ChangeGeneratedTestOptions(uiToolkit = UiToolkit.entries[it])) })
 		}
-		OutlinedButton({ onEvent(StudioEvent.RegenerateTest(generated.allowIncomplete)) }, enabled = !generated.loading) { Text("Regenerate") }
-		OutlinedButton({ onEvent(StudioEvent.CopyGeneratedTest) }, enabled = generated.generated != null) { Text("Copy") }
-		Button({ onEvent(StudioEvent.SaveGeneratedTest) }, enabled = generated.generated != null) { Text("Save as…") }
+		SecondaryButton("Regenerate", { onEvent(StudioEvent.RegenerateTest(generated.allowIncomplete)) }, enabled = !generated.loading)
+		CopyButton(generated.generated?.source.orEmpty(), enabled = generated.generated != null, onCopied = { onEvent(StudioEvent.ShowNotice("Copied generated test")) })
+		PrimaryButton("Save as…", { onEvent(StudioEvent.SaveGeneratedTest) }, enabled = generated.generated != null)
 	}
 }
 
 @Composable private fun GenerationProblemView(problem: GenerationProblem, onEvent: (StudioEvent) -> Unit, modifier: Modifier) {
-	Card(modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-			Text(
-				when (problem.kind) {
-					GenerationProblemKind.Incomplete -> "Some recorded steps could not be compiled"
-					GenerationProblemKind.Redacted -> "The plan contains redacted values"
-					GenerationProblemKind.NoEmitter -> "No generator for this platform"
-				},
-				style = MaterialTheme.typography.titleMedium,
-				color = MaterialTheme.colorScheme.onErrorContainer,
-			)
-			Text(problem.message, color = MaterialTheme.colorScheme.onErrorContainer)
-			if (problem.kind == GenerationProblemKind.Incomplete) {
-				Text("Generating anyway inserts a failing assertion where each missing step belongs.", style = MaterialTheme.typography.bodySmall)
-				Button({ onEvent(StudioEvent.RegenerateTest(allowIncomplete = true)) }) { Text("Generate anyway") }
-			}
+	val title = when (problem.kind) {
+		GenerationProblemKind.Incomplete -> "Some recorded steps could not be compiled"
+		GenerationProblemKind.Redacted -> "The plan contains redacted values"
+		GenerationProblemKind.NoEmitter -> "No generator for this platform"
+	}
+	Column(modifier, verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+		NoticeCard(problem.message, title = title, tone = StatusTone.ERROR)
+		if (problem.kind == GenerationProblemKind.Incomplete) {
+			Text("Generating anyway inserts a failing assertion where each missing step belongs.", style = MaterialTheme.typography.bodySmall)
+			PrimaryButton("Generate anyway", { onEvent(StudioEvent.RegenerateTest(allowIncomplete = true)) })
 		}
 	}
 }
 
 @Composable private fun OperationList(generated: GeneratedTestState, onEvent: (StudioEvent) -> Unit, modifier: Modifier) {
-	LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-		item(key = "header") { Text("Steps", style = MaterialTheme.typography.titleSmall) }
+	LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.extraSmall)) {
+		item(key = "header") { SectionHeader("Steps") }
 		items(generated.operations, key = { it.id }) { operation ->
-			val selected = operation.id == generated.selectedOperationId
-			val warnings = generated.warningsFor(operation.id)
-			Card(
-				Modifier.fillMaxWidth().semantics { this.selected = selected }.clickable(onClickLabel = "Show generated lines") { onEvent(StudioEvent.SelectGeneratedOperation(operation.id)) },
-				colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow),
-			) {
-				Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-					Text(operation.tool, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
-					if (operation.arguments.isNotEmpty()) {
-						Text(operation.arguments.entries.joinToString(" ") { "${it.key}=${it.value}" }, style = MaterialTheme.typography.bodySmall, maxLines = 2)
-					}
-					warnings.forEach { warning ->
-						Text(
-							"${warning.kind.name}: ${warning.reason}",
-							style = MaterialTheme.typography.labelSmall,
-							color = if (warning.kind.isSerious) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
-							maxLines = 3,
-						)
-					}
-					if (generated.span(operation.id) == null) Text("Not in the generated code", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+			SelectableCard(operation.id == generated.selectedOperationId, { onEvent(StudioEvent.SelectGeneratedOperation(operation.id)) }, Modifier.fillMaxWidth()) {
+				Text(operation.tool, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+				if (operation.arguments.isNotEmpty()) Text(operation.arguments.entries.joinToString(" ") { "${it.key}=${it.value}" }, style = MaterialTheme.typography.bodySmall)
+				generated.warningsFor(operation.id).forEach { warning ->
+					StatusMessage("${warning.kind.name}: ${warning.reason}", tone = if (warning.kind.isSerious) StatusTone.ERROR else StatusTone.WARNING)
 				}
+				if (generated.span(operation.id) == null) Text("Not in the generated code", style = MaterialTheme.typography.labelSmall)
 			}
 		}
 	}
@@ -153,19 +181,21 @@ const val TESTS_GENERATE_CAPABILITY = "tests.generate"
 		}
 	}
 	val diagnostics = remember(source, generated.warnings) { warningDiagnostics(generated, source) }
-	Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest)) {
-		CodeEditor(
-			value = source.source,
-			onValueChange = {},
-			modifier = Modifier.fillMaxSize().padding(4.dp),
-			language = language,
-			readOnly = true,
-			lineHighlights = highlights,
-			diagnostics = diagnostics,
-			revealLine = selectedSpan?.let { it.startLine - 1 },
-			onLineClick = { line -> generated.operationAt(line + 1)?.let { onEvent(StudioEvent.SelectGeneratedOperation(it)) } },
-			labels = CodeEditorLabels(editorDescription = "Generated test source"),
-		)
+	ThemeCard(modifier, contentPadding = PaddingValues(0.dp)) {
+		CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+			CodeEditor(
+				value = source.source,
+				onValueChange = {},
+				modifier = Modifier.fillMaxSize().padding(MaterialTheme.kmpSpacing.extraSmall),
+				language = language,
+				readOnly = true,
+				lineHighlights = highlights,
+				diagnostics = diagnostics,
+				revealLine = selectedSpan?.let { it.startLine - 1 },
+				onLineClick = { line -> generated.operationAt(line + 1)?.let { onEvent(StudioEvent.SelectGeneratedOperation(it)) } },
+				labels = CodeEditorLabels(editorDescription = "Generated test source"),
+			)
+		}
 	}
 }
 
@@ -188,24 +218,10 @@ internal fun warningDiagnostics(generated: GeneratedTestState, source: Generated
 
 @Composable private fun StepScreenshot(generated: GeneratedTestState, modifier: Modifier) {
 	val pinned = generated.selectedOperationId?.let(generated.stepScreenshots::get)
-	Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-		Box(Modifier.fillMaxSize().padding(8.dp), contentAlignment = Alignment.Center) {
-			if (pinned == null) {
-				Text(
-					if (generated.stepScreenshots.isEmpty()) "Screenshots appear here for tests generated from an agent run or a console recording." else "No screenshot for this step.",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
-			} else {
-				StepScreenshotImage(pinned)
-			}
+	ThemeCard(modifier) {
+		Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+			if (pinned == null) EmptyState("No screenshot", message = if (generated.stepScreenshots.isEmpty()) "Screenshots appear here for tests generated from an agent run or a console recording." else "No screenshot for this step.")
+			else StepScreenshotImage(pinned, "Screen after ${pinned.title}")
 		}
 	}
-}
-
-@Composable private fun StepScreenshotImage(pinned: PinnedScreenshot) {
-	val loader = LocalScreenshotLoader.current
-	val image by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, pinned.screenshot.path) { value = loader.load(pinned.screenshot.path, 1_200) }
-	val bitmap = image ?: run { CircularProgressIndicator(); return }
-	ZoomableBitmap(bitmap, "Screen after ${pinned.title}", overlay = pinned.gesturePoint?.let { pointInImage(it, pinned.screenshot, bitmap) })
 }

@@ -1,22 +1,39 @@
 package dev.amoo.studio
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.arjangconsulting.codeeditor.CodeEditor
+import com.arjangconsulting.codeeditor.CodeEditorLabels
+import com.arjangconsulting.codeeditor.CodeEditorOptions
 import com.arjangconsulting.codeeditor.CodeSnippet
 import com.arjangconsulting.codeeditor.JsonRules
 import com.arjangconsulting.codeeditor.TokenRules
-import androidx.compose.ui.text.style.TextOverflow
-import com.arjangconsulting.codeeditor.CodeEditorLabels
-import com.arjangconsulting.codeeditor.CodeEditorOptions
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import io.github.maniramezan.kmpcomponents.DisclosureCard
+import io.github.maniramezan.kmpcomponents.EmptyState
+import io.github.maniramezan.kmpcomponents.FlowLayout
+import io.github.maniramezan.kmpcomponents.InlineProgressIndicator
+import io.github.maniramezan.kmpcomponents.PrimaryButton
+import io.github.maniramezan.kmpcomponents.SecondaryButton
+import io.github.maniramezan.kmpcomponents.SectionHeader
+import io.github.maniramezan.kmpcomponents.StatusMessage
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeCard
+import io.github.maniramezan.kmpcomponents.ThemeSurface
+import io.github.maniramezan.kmpcomponents.ThemeTextButton
+import io.github.maniramezan.kmpcomponents.TonalBadge
+import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable internal fun ConsoleContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	Workbench(
@@ -32,20 +49,16 @@ import androidx.compose.ui.unit.dp
 	val canExecute = state.connection.supports("repl.execute")
 	val parse = state.consoleParse()
 	val validationError = parse.diagnostics.firstOrNull { it.severity == ReplSeverity.Error }?.message
-	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-			Column(Modifier.weight(1f)) {
-				Text("Amoo command console", style = MaterialTheme.typography.titleLarge)
-				Text("Run structured Amoo operations without leaving Studio.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-			}
-			TextButton({ onEvent(StudioEvent.ClearConsole) }, enabled = state.console.entries.isNotEmpty()) { Text("Clear history") }
-		}
+	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium)) {
+		SectionHeader("Amoo command console", subtitle = "Run structured Amoo operations without leaving Studio.", titleStyle = MaterialTheme.typography.titleLarge, actions = {
+			ThemeTextButton("Clear history", { onEvent(StudioEvent.ClearConsole) }, enabled = state.console.entries.isNotEmpty())
+		})
 		RecordingBar(state, onEvent)
-		if (!canExecute) Text("The connected Amoo version does not advertise repl.execute. Update Amoo to enable command execution.", color = MaterialTheme.colorScheme.error)
-		LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			if (state.console.entries.isEmpty()) item { Text("Type a command below or choose a suggestion. Destructive app operations remain in Devices so Studio can request explicit approval.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+		if (!canExecute) StatusMessage("Update Amoo to enable command execution.", tone = StatusTone.WARNING)
+		LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
+			if (state.console.entries.isEmpty()) item(key = "empty") { EmptyState("No commands yet", message = "Type a command below or choose a suggestion. Destructive app operations remain in Devices so Studio can request explicit approval.") }
 			items(state.console.entries, key = { it.id }) { entry -> ConsoleEntryCard(entry, rules, onEvent) }
-			if (state.console.operation == ConsoleOperation.Running) item { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { CircularProgressIndicator(Modifier.size(18.dp)); Text("Running command…") } }
+			if (state.console.operation == ConsoleOperation.Running) item(key = "running") { InlineProgressIndicator("Running command…") }
 		}
 		ConsoleInput(state, canExecute && validationError == null, onEvent)
 		Text(
@@ -53,10 +66,10 @@ import androidx.compose.ui.unit.dp
 			style = MaterialTheme.typography.bodySmall,
 			color = if (validationError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
 		)
-		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-			OutlinedButton({ onEvent(StudioEvent.AddTestPlanOperation(state.console.input)) }, enabled = parseToolCommand(state.console.input, state.toolCatalog) != null && state.console.operation == ConsoleOperation.Idle) { Text("Add to test plan") }
-			if (state.console.operation == ConsoleOperation.Running) OutlinedButton({ onEvent(StudioEvent.CancelConsoleCommand) }) { Text("Cancel") }
-			else Button({ onEvent(StudioEvent.ExecuteConsoleCommand) }, enabled = canExecute && validationError == null && state.console.input.isNotBlank()) { Text("Run") }
+		FlowLayout(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+			SecondaryButton("Add to test plan", { onEvent(StudioEvent.AddTestPlanOperation(state.console.input)) }, enabled = parseToolCommand(state.console.input, state.toolCatalog) != null && state.console.operation == ConsoleOperation.Idle)
+			if (state.console.operation == ConsoleOperation.Running) SecondaryButton("Cancel", { onEvent(StudioEvent.CancelConsoleCommand) })
+			else PrimaryButton("Run", { onEvent(StudioEvent.ExecuteConsoleCommand) }, enabled = canExecute && validationError == null && state.console.input.isNotBlank())
 		}
 	}
 }
@@ -67,7 +80,7 @@ import androidx.compose.ui.unit.dp
 	if (recording == null) {
 		val readiness = state.sessionReadiness(REPL_RECORDING_CAPABILITY)
 		if (readiness == SessionReadiness.Unsupported) return
-		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium)) {
 			Text(
 				when (readiness) {
 					is SessionReadiness.Ready -> "Record to turn the commands you run on ${readiness.device.name} into a test. Recording relaunches ${readiness.appId}."
@@ -79,32 +92,23 @@ import androidx.compose.ui.unit.dp
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
-			OutlinedButton(
+			SecondaryButton("Record",
 				{ onEvent(StudioEvent.StartConsoleRecording) },
 				enabled = readiness is SessionReadiness.Ready && state.console.operation == ConsoleOperation.Idle,
-			) { Text("Record") }
+			)
 		}
 		return
 	}
-	val stopped = recording.status == ConsoleRecordingStatus.Stopped
-	Card(
-		Modifier.fillMaxWidth(),
-		colors = CardDefaults.cardColors(containerColor = if (stopped) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer),
-	) {
-		Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-			if (recording.status == ConsoleRecordingStatus.Starting || recording.status == ConsoleRecordingStatus.Stopping) CircularProgressIndicator(Modifier.size(18.dp))
-			Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-				Text(recording.headline, fontWeight = FontWeight.Medium)
-				recording.detail(state.selectedDeviceId)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-			}
+	ThemeCard {
+		if (recording.status == ConsoleRecordingStatus.Starting || recording.status == ConsoleRecordingStatus.Stopping) InlineProgressIndicator(recording.headline)
+		else Text(recording.headline, style = MaterialTheme.typography.titleMedium)
+		recording.detail(state.selectedDeviceId)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+		FlowLayout {
 			when (recording.status) {
-				ConsoleRecordingStatus.Recording -> Button({ onEvent(StudioEvent.StopConsoleRecording) }, enabled = state.console.operation == ConsoleOperation.Idle) { Text("Stop recording") }
+				ConsoleRecordingStatus.Recording -> PrimaryButton("Stop recording", { onEvent(StudioEvent.StopConsoleRecording) }, enabled = state.console.operation == ConsoleOperation.Idle)
 				ConsoleRecordingStatus.Stopped -> {
-					TextButton({ onEvent(StudioEvent.DismissConsoleRecording) }) { Text("Dismiss") }
-					Button(
-						{ onEvent(StudioEvent.GenerateConsoleTest) },
-						enabled = recording.sessionId != null && recording.actionCount > 0 && state.connection.supports(TESTS_GENERATE_CAPABILITY),
-					) { Text("Generate test") }
+					ThemeTextButton("Dismiss", { onEvent(StudioEvent.DismissConsoleRecording) })
+					PrimaryButton("Generate test", { onEvent(StudioEvent.GenerateConsoleTest) }, enabled = recording.sessionId != null && recording.actionCount > 0 && state.connection.supports(TESTS_GENERATE_CAPABILITY))
 				}
 				ConsoleRecordingStatus.Starting, ConsoleRecordingStatus.Stopping -> Unit
 			}
@@ -132,30 +136,22 @@ private fun ConsoleRecording.detail(selectedDeviceId: String?): String? = when {
 private fun stepCount(count: Int) = if (count == 1) "1 step" else "$count steps"
 
 @Composable private fun ConsoleEntryCard(entry: ConsoleEntry, rules: TokenRules, onEvent: (StudioEvent) -> Unit) {
-	val container = if (entry.failed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerLow
 	var showDetails by remember(entry.id) { mutableStateOf(false) }
 	val details = remember(entry.structuredContent) { entry.structuredContent?.let(::prettyJson) }
-	Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = container)) {
-		Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-			Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-				CodeSnippet(entry.command, language = rules, maxLines = 1, overflow = TextOverflow.Ellipsis)
-				entry.actionIndex?.let { Text("Recorded as step ${it + 1}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary) }
-				Text(entry.output, color = if (entry.failed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface)
-				if (details != null) {
-					TextButton({ showDetails = !showDetails }, contentPadding = PaddingValues(0.dp)) { Text(if (showDetails) "Hide details" else "Show details") }
-					if (showDetails) CodeSnippet(details, language = JsonRules, softWrap = true)
-				}
-			}
-			entry.screenshot?.let { screenshot ->
-				ScreenshotThumbnail(
-					screenshot,
-					description = "Screen after ${entry.command}",
-					onClick = { onEvent(StudioEvent.PinScreenshot(PinnedScreenshot(entry.command, screenshot, entry.gesturePoint))) },
-					modifier = Modifier.size(width = 72.dp, height = 132.dp),
-				)
-			}
+	val summary: @Composable RowScope.() -> Unit = {
+		Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.extraSmall)) {
+			CodeSnippet(entry.command, language = rules, maxLines = 1, overflow = TextOverflow.Ellipsis)
+			entry.actionIndex?.let { TonalBadge("Recorded as step ${it + 1}") }
+			if (entry.failed) StatusMessage(entry.output, tone = StatusTone.ERROR) else Text(entry.output)
+			if (details != null) Text(if (showDetails) "Hide details" else "Show details", style = MaterialTheme.typography.labelLarge)
+		}
+		entry.screenshot?.let { screenshot ->
+			ScreenshotThumbnail(screenshot, "Screen after ${entry.command}", { onEvent(StudioEvent.PinScreenshot(PinnedScreenshot(entry.command, screenshot, entry.gesturePoint))) }, Modifier.size(width = 72.dp, height = 132.dp))
 		}
 	}
+	if (details != null) {
+		DisclosureCard(showDetails, { showDetails = it }, summary = summary, detail = { CodeSnippet(details, language = JsonRules, softWrap = true) })
+	} else ThemeCard { Row(horizontalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small), content = summary) }
 }
 
 /**
@@ -168,20 +164,21 @@ private fun stepCount(count: Int) = if (count == 1) "1 step" else "$count steps"
 	val service = remember(assist) { ConsoleLanguageService({ current.toolCatalog }, { current.devices }, assist) }
 	val rules = remember(state.toolCatalog) { amooCommandRules(state.toolCatalog) }
 	val running = state.console.operation == ConsoleOperation.Running
-	OutlinedCard(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-		CodeEditor(
-			value = state.console.input,
-			onValueChange = { onEvent(StudioEvent.ChangeConsoleInput(it)) },
-			modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-			language = rules,
-			languageService = service,
-			readOnly = running,
-			singleLine = true,
-			onSubmit = { if (canRun && it.isNotBlank() && !running) onEvent(StudioEvent.ExecuteConsoleCommand) },
-			onHistory = { onEvent(StudioEvent.NavigateConsoleHistory(it)) },
-			labels = CodeEditorLabels(editorDescription = "Amoo command"),
-			options = CodeEditorOptions(highlightCurrentLine = false),
-		)
+	ThemeSurface(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), MaterialTheme.shapes.medium), contentPadding = PaddingValues(0.dp)) {
+		CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+			CodeEditor(
+				value = state.console.input,
+				onValueChange = { onEvent(StudioEvent.ChangeConsoleInput(it)) },
+				modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+				language = rules,
+				languageService = service,
+				readOnly = running,
+				singleLine = true,
+				onSubmit = { if (canRun && it.isNotBlank() && !running) onEvent(StudioEvent.ExecuteConsoleCommand) },
+				onHistory = { onEvent(StudioEvent.NavigateConsoleHistory(it)) },
+				labels = CodeEditorLabels(editorDescription = "Amoo command"),
+				options = CodeEditorOptions(highlightCurrentLine = false),
+			)
+		}
 	}
 }
-

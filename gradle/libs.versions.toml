@@ -4,6 +4,9 @@ compose = "1.12.2"
 coroutines = "1.11.0"
 serialization = "1.11.0"
 kover = "0.9.11"
+kmp-components = "0.2.0"
+credential-keychain = "0.1.1"
+testcommons = "0.1.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -13,7 +16,11 @@ compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.re
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
-kmp-components = { module = "io.github.maniramezan.kmpcomponents:components", version = "0.1.1" }
+compose-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
+kmp-components = { module = "io.github.maniramezan.kmpcomponents:components", version.ref = "kmp-components" }
+credential-keychain = { module = "io.github.maniramezan:credential-keychain-kotlin", version.ref = "credential-keychain" }
+testcommons-core = { module = "io.github.maniramezan.testcommons:core", version.ref = "testcommons" }
+testcommons-compose = { module = "io.github.maniramezan.testcommons:compose", version.ref = "testcommons" }
 # Not yet published; resolved from a sibling kmp-code-editor checkout until its first release.
 kmp-code-editor = { module = "com.arjangconsulting.codeeditor:code-editor", version = "0.1.0" }
 

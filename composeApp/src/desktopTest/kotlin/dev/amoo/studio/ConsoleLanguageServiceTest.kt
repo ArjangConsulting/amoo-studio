@@ -5,6 +5,7 @@ import com.arjangconsulting.codeeditor.CompletionTrigger
 import com.arjangconsulting.codeeditor.DiagnosticSeverity
 import com.arjangconsulting.codeeditor.DocumentSnapshot
 import com.arjangconsulting.codeeditor.TextPosition
+import io.github.maniramezan.testcommons.ScriptedResponder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -16,9 +17,11 @@ import kotlin.test.assertTrue
 class ConsoleLanguageServiceTest {
 	private val catalog = ToolCatalog.Legacy
 
-	private class ScriptedAssist(val completion: ReplCompletion? = null, val diagnostics: List<ReplDiagnostic>? = null, val failure: Throwable? = null) : ReplAssist {
-		override suspend fun complete(line: String, cursor: Int): ReplCompletion? { failure?.let { throw it }; return completion }
-		override suspend fun validate(line: String): List<ReplDiagnostic>? { failure?.let { throw it }; return diagnostics }
+	private class ScriptedAssist(completion: ReplCompletion? = null, diagnostics: List<ReplDiagnostic>? = null, failure: Throwable? = null) : ReplAssist {
+		val completions = ScriptedResponder<Pair<String, Int>, ReplCompletion?>(listOf(if (failure == null) Result.success(completion) else Result.failure(failure)))
+		val validations = ScriptedResponder<String, List<ReplDiagnostic>?>(listOf(if (failure == null) Result.success(diagnostics) else Result.failure(failure)))
+		override suspend fun complete(line: String, cursor: Int): ReplCompletion? = completions.respond(line to cursor)
+		override suspend fun validate(line: String): List<ReplDiagnostic>? = validations.respond(line)
 	}
 
 	private fun service(assist: ReplAssist = ReplAssist.None) = ConsoleLanguageService({ catalog }, { emptyList() }, assist)
@@ -27,12 +30,14 @@ class ConsoleLanguageServiceTest {
 	fun `Amoo's completion is used with its replacement range`() = runBlocking<Unit> {
 		val amoo = ReplCompletion(15, 15, listOf(ReplCompletionItem("login", "login", "button · Sign in", kind = ReplCompletionKind.Element)))
 
-		val list = service(ScriptedAssist(completion = amoo)).complete(DocumentSnapshot("tap_element id=", 1), TextPosition(0, 15), CompletionTrigger.character('='))!!
+		val assist = ScriptedAssist(completion = amoo)
+		val list = service(assist).complete(DocumentSnapshot("tap_element id=", 1), TextPosition(0, 15), CompletionTrigger.character('='))!!
 
 		val item = list.items.single()
 		assertEquals("login", item.textEdit?.newText)
 		assertEquals(TextPosition(0, 15), item.textEdit?.range?.start)
 		assertEquals(CompletionItemKind.REFERENCE, item.kind)
+		assertEquals(listOf("tap_element id=" to 15), assist.completions.requests)
 	}
 
 	@Test

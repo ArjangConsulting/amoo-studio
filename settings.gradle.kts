@@ -21,24 +21,17 @@ dependencyResolutionManagement {
 	}
 }
 
-// KMPComponents resolves from Maven Central by default. A sibling
-// checkout is included automatically when present; -PuseLocalKmpComponents=true|false overrides that.
-val localKmpComponents = file("../KMPComponents")
-val useLocalKmpComponents = providers.gradleProperty("useLocalKmpComponents").orNull?.toBoolean()
-	?: localKmpComponents.resolve("settings.gradle.kts").isFile
+val localKmpComponents = file(providers.gradleProperty("localKmpComponentsPath").orNull ?: "../KMPComponents")
+val useLocalKmpComponents = providers.gradleProperty("useLocalKmpComponents").map(String::toBoolean).orElse(false).get()
 if (useLocalKmpComponents) {
 	require(localKmpComponents.resolve("settings.gradle.kts").isFile) {
-		"useLocalKmpComponents requires KMPComponents to be checked out next to amoo-studio"
+		"useLocalKmpComponents requires KMPComponents at ${localKmpComponents.path}"
 	}
 	includeBuild(localKmpComponents)
 }
 
-// credential-keychain-kotlin is resolved from Maven Central by default. Point the build at a local
-// checkout with -PuseLocalCredentialKeychain=true (optionally -PlocalCredentialKeychainPath=...);
-// when the property is unset, a sibling checkout is used automatically if one exists.
 val localCredentialKeychain = file(providers.gradleProperty("localCredentialKeychainPath").orNull ?: "../credential-keychain-kotlin")
-val useLocalCredentialKeychain = providers.gradleProperty("useLocalCredentialKeychain").orNull?.toBoolean()
-	?: localCredentialKeychain.resolve("settings.gradle.kts").isFile
+val useLocalCredentialKeychain = providers.gradleProperty("useLocalCredentialKeychain").map(String::toBoolean).orElse(false).get()
 if (useLocalCredentialKeychain) {
 	require(localCredentialKeychain.resolve("settings.gradle.kts").isFile) {
 		"useLocalCredentialKeychain requires credential-keychain-kotlin at ${localCredentialKeychain.path}"

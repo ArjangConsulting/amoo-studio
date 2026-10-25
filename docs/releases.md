@@ -34,3 +34,9 @@ CI packages without embedding Amoo so pull requests can validate `jpackage` inde
 release. The release workflow additionally runs `verifyEmbeddedAmoo`, which checks the archive's checksum
 and that it contains an executable `amoo` and the prebuilt companions, so it cannot publish an empty
 GUI shell or one that would compile companions on a user's machine.
+
+Provider credentials use credential-keychain-kotlin's native secure storage. macOS desktop builds
+use the login keychain through `/usr/bin/security`; Linux desktop sessions need `secret-tool` and a
+running Secret Service. There is no plaintext fallback. Updates must retain the `amoo-studio`
+service and account namespace so previously saved API keys remain available. OS keychain failures
+are surfaced in Settings with explicit retry actions.

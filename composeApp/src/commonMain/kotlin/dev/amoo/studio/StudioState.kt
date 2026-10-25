@@ -1,6 +1,8 @@
 package dev.amoo.studio
 
 import androidx.compose.runtime.Immutable
+import io.github.maniramezan.kmpcomponents.SplitPaneDefaults
+import io.github.maniramezan.kmpcomponents.coerceSplit
 import kotlin.jvm.JvmInline
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
@@ -28,6 +30,11 @@ data class StudioState(
 	val providerChecks: Map<String, ProviderCheckState> = emptyMap(),
 	val providerApiKeysLoaded: Boolean = false,
 	val editingProviderId: String? = null,
+	val providerDraft: ProviderProfile = newProviderDraft(),
+	val providerApiKeyReadFailures: Map<String, String> = emptyMap(),
+	val providerApiKeySaveFailures: Map<String, String> = emptyMap(),
+	val providerApiKeysSaving: Set<String> = emptySet(),
+	val providerApiKeyDeletionFailures: Map<String, String> = emptyMap(),
 	val chat: ChatState = ChatState(),
 	val console: ConsoleState = ConsoleState(),
 	val notice: String? = null,
@@ -248,6 +255,12 @@ const val AMOO_HOMEBREW_FORMULA = "amoo"
 const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap $AMOO_HOMEBREW_TAP"
 const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install $AMOO_HOMEBREW_FORMULA"
 
+/** An unread existing key must not be interpreted as an empty key and deleted by a form save. */
+fun StudioState.canSaveProvider(profile: ProviderProfile): Boolean =
+	profile.id !in providerApiKeyReadFailures && profile.id !in providerApiKeysSaving && (providerApiKeysLoaded || providers.none { it.id == profile.id } || providers.firstOrNull { it.id == profile.id }?.apiKey?.isBlank == false)
+
+fun newProviderDraft() = ProviderProfile("", "", ProviderKind.OpenAI, ProviderKind.OpenAI.defaultBaseUrl, "", ProviderKind.OpenAI.defaultApiKeyEnvironmentVariable)
+
 fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.8:27b-mlx"))
 
 sealed interface StudioEvent {
@@ -296,7 +309,13 @@ sealed interface StudioEvent {
 	data class RemoveProvider(val id: String) : StudioEvent
 	data class EditProvider(val id: String) : StudioEvent
 	data object CancelProviderEdit : StudioEvent
-	data class ProviderApiKeysLoaded(val keys: Map<String, Secret>) : StudioEvent
+	data class ProviderApiKeysLoaded(val keys: Map<String, Secret>, val failures: Map<String, String> = emptyMap()) : StudioEvent
+	data class ChangeProviderDraft(val profile: ProviderProfile) : StudioEvent
+	data object RetryProviderApiKeys : StudioEvent
+	data class RetryProviderApiKeySave(val id: String) : StudioEvent
+	data class ProviderApiKeySaveFinished(val id: String, val error: String? = null) : StudioEvent
+	data class RetryProviderApiKeyDelete(val id: String) : StudioEvent
+	data class ProviderApiKeyDeleteFinished(val id: String, val error: String? = null) : StudioEvent
 	data class SelectProvider(val id: String) : StudioEvent
 	data class CheckProvider(val id: String) : StudioEvent
 	data class ProviderCheckFinished(val id: String, val message: String) : StudioEvent
@@ -375,10 +394,10 @@ sealed interface StudioEvent {
 	data class TestGenerated(val generated: GeneratedSource?, val problem: GenerationProblem?, val test: AmooTest) : StudioEvent
 	data class TestGenerationFailed(val message: String) : StudioEvent
 	data class SelectGeneratedOperation(val operationId: String?) : StudioEvent
+	data class ChangeGeneratedTestLayout(val operationsSplit: Float? = null, val sourceSplit: Float? = null) : StudioEvent
 	data class ChangeGeneratedTestOptions(val uiToolkit: UiToolkit? = null, val testName: String? = null) : StudioEvent
 	data class RegenerateTest(val allowIncomplete: Boolean) : StudioEvent
 	data object SaveGeneratedTest : StudioEvent
-	data object CopyGeneratedTest : StudioEvent
 }
 
 fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
@@ -448,19 +467,41 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ReportsLoaded -> copy(reports = event.reports, reportsLoading = false, selectedReportId = selectedReportId?.takeIf { id -> event.reports.any { it.id == id } } ?: event.reports.firstOrNull()?.id)
 	is StudioEvent.ReportsFailed -> copy(reportsLoading = false, notice = event.message)
 	is StudioEvent.SelectReport -> copy(selectedReportId = event.id)
-	is StudioEvent.SaveProvider -> copy(
+	is StudioEvent.SaveProvider -> if (!canSaveProvider(event.profile)) copy(notice = if (event.profile.id in providerApiKeysSaving) "Wait for the API key to finish saving before editing this provider." else "Read the stored API key before editing this provider.") else copy(
 		providers = if (providers.any { it.id == event.profile.id }) providers.map { if (it.id == event.profile.id) event.profile else it } else providers + event.profile,
 		selectedProviderId = event.profile.id,
 		providerChecks = providerChecks - event.profile.id,
 		editingProviderId = null,
-		notice = "Provider saved",
+		providerDraft = newProviderDraft(),
+		providerApiKeysSaving = providerApiKeysSaving + event.profile.id,
+		providerApiKeyDeletionFailures = providerApiKeyDeletionFailures - event.profile.id,
+		notice = "Provider profile saved",
 	)
-	is StudioEvent.RemoveProvider -> copy(providers = providers.filterNot { it.id == event.id }, selectedProviderId = selectedProviderId.takeUnless { it == event.id }, providerChecks = providerChecks - event.id, editingProviderId = editingProviderId.takeUnless { it == event.id })
-	is StudioEvent.EditProvider -> copy(editingProviderId = event.id.takeIf { id -> providers.any { it.id == id } })
-	StudioEvent.CancelProviderEdit -> copy(editingProviderId = null)
+	is StudioEvent.RemoveProvider -> copy(
+		providers = providers.filterNot { it.id == event.id },
+		selectedProviderId = selectedProviderId.takeUnless { it == event.id },
+		providerChecks = providerChecks - event.id,
+		editingProviderId = editingProviderId.takeUnless { it == event.id },
+		providerDraft = if (editingProviderId == event.id) newProviderDraft() else providerDraft,
+		providerApiKeyReadFailures = providerApiKeyReadFailures - event.id,
+		providerApiKeySaveFailures = providerApiKeySaveFailures - event.id,
+		providerApiKeysSaving = providerApiKeysSaving - event.id,
+	)
+	is StudioEvent.EditProvider -> if (!providerApiKeysLoaded || event.id in providerApiKeyReadFailures) this else providers.firstOrNull { it.id == event.id }?.let { copy(editingProviderId = it.id, providerDraft = it) } ?: this
+	StudioEvent.CancelProviderEdit -> copy(editingProviderId = null, providerDraft = newProviderDraft())
+	is StudioEvent.ChangeProviderDraft -> copy(providerDraft = event.profile)
+	StudioEvent.RetryProviderApiKeys -> copy(providerApiKeysLoaded = false)
+	is StudioEvent.RetryProviderApiKeySave -> if (providers.firstOrNull { it.id == event.id }?.let(::canSaveProvider) == true) copy(providerApiKeysSaving = providerApiKeysSaving + event.id) else this
+	is StudioEvent.ProviderApiKeySaveFinished -> copy(
+		providerApiKeysSaving = providerApiKeysSaving - event.id,
+		providerApiKeySaveFailures = if (event.error == null || providers.none { it.id == event.id }) providerApiKeySaveFailures - event.id else providerApiKeySaveFailures + (event.id to event.error),
+	)
+	is StudioEvent.RetryProviderApiKeyDelete -> this
+	is StudioEvent.ProviderApiKeyDeleteFinished -> copy(providerApiKeyDeletionFailures = if (event.error == null || providers.any { it.id == event.id }) providerApiKeyDeletionFailures - event.id else providerApiKeyDeletionFailures + (event.id to event.error))
 	is StudioEvent.ProviderApiKeysLoaded -> copy(
 		providers = providers.map { profile -> event.keys[profile.id]?.takeIf { profile.apiKey.isBlank }?.let { profile.copy(apiKey = it) } ?: profile },
 		providerApiKeysLoaded = true,
+		providerApiKeyReadFailures = event.failures.filterKeys { id -> providers.any { it.id == id } },
 	)
 	is StudioEvent.SelectProvider -> copy(selectedProviderId = event.id)
 	is StudioEvent.CheckProvider -> copy(providerChecks = providerChecks + (event.id to ProviderCheckState.Checking))
@@ -534,7 +575,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.ToggleMirrorPaused -> copy(mirror = mirror.copy(paused = !mirror.paused, status = if (mirror.paused) mirror.status else MirrorStatus.Paused))
 	is StudioEvent.PinScreenshot -> copy(mirror = mirror.copy(pinned = event.pinned))
 	StudioEvent.ReturnToLiveMirror -> copy(mirror = mirror.copy(pinned = null))
-	is StudioEvent.ChangeWorkbenchSplit -> copy(workbenchSplit = event.fraction.coerceIn(MIN_WORKBENCH_SPLIT, MAX_WORKBENCH_SPLIT))
+	is StudioEvent.ChangeWorkbenchSplit -> copy(workbenchSplit = coerceSplit(event.fraction, MIN_WORKBENCH_SPLIT, MAX_WORKBENCH_SPLIT))
 	is StudioEvent.AgentRunStarted -> copy(
 		agentRun = AgentRunState(event.runId, event.request.content),
 		chat = chat.copy(input = "", messages = chat.messages + event.request, lastError = null),
@@ -564,12 +605,16 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	))
 	is StudioEvent.TestGenerationFailed -> copy(generatedTest = generatedTest?.copy(loading = false), notice = event.message)
 	is StudioEvent.SelectGeneratedOperation -> copy(generatedTest = generatedTest?.copy(selectedOperationId = event.operationId))
+	is StudioEvent.ChangeGeneratedTestLayout -> copy(generatedTest = generatedTest?.copy(
+		operationsSplit = coerceSplit(event.operationsSplit ?: generatedTest.operationsSplit, SplitPaneDefaults.MIN_SPLIT, SplitPaneDefaults.MAX_SPLIT),
+		sourceSplit = coerceSplit(event.sourceSplit ?: generatedTest.sourceSplit, SplitPaneDefaults.MIN_SPLIT, SplitPaneDefaults.MAX_SPLIT),
+	))
 	is StudioEvent.ChangeGeneratedTestOptions -> copy(generatedTest = generatedTest?.copy(
 		uiToolkit = event.uiToolkit ?: generatedTest.uiToolkit,
 		testName = event.testName ?: generatedTest.testName,
 	))
 	is StudioEvent.RegenerateTest -> copy(generatedTest = generatedTest?.copy(loading = true, allowIncomplete = event.allowIncomplete))
-	StudioEvent.SaveGeneratedTest, StudioEvent.CopyGeneratedTest -> this
+	StudioEvent.SaveGeneratedTest -> this
 }
 
 /**

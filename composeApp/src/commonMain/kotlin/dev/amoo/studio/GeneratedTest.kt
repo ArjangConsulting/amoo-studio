@@ -65,6 +65,8 @@ data class GeneratedTestState(
 	val allowIncomplete: Boolean = false,
 	val uiToolkit: UiToolkit? = null,
 	val testName: String = "",
+	val operationsSplit: Float = 0.24f,
+	val sourceSplit: Float = 0.72f,
 ) {
 	val operations: List<ToolOperation> get() = test?.compiledPlan?.toolOperations.orEmpty()
 	val warnings: List<PlanWarning> get() = test?.compiledPlan?.warnings.orEmpty()

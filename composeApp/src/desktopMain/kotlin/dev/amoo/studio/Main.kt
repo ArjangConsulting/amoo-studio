@@ -13,11 +13,11 @@ import dev.amoo.composeapp.generated.resources.icon_512
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import com.maniramezan.credentialkeychain.CredentialKeychain
 import io.github.maniramezan.processrpc.BundledBinaryLocator
 import io.github.maniramezan.processrpc.ProcessRpcClient
 import io.github.maniramezan.processrpc.ProcessRpcState
 import io.github.maniramezan.processrpc.RpcNotification
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -134,7 +134,7 @@ private class StudioController(
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 	private val testFileStore = AmooTestFileStore(json)
-	private val providerStore = ProviderStore(preferences, CredentialKeychain.forCurrentPlatform("amoo-studio"), json)
+	private val providerStore = ProviderStore(preferences, createProviderKeychain(), json)
 	// Keychain access can block or prompt; a single worker also keeps writes and deletes in order.
 	private val keychainDispatcher = Dispatchers.IO.limitedParallelism(1)
 	val state = MutableStateFlow(StudioState(
@@ -242,6 +242,12 @@ private class StudioController(
 		val approvedAction = state.value.pendingApproval?.action
 		val createDeviceRequest = state.value.createDevice
 		val activeRunId = (state.value.testExecution as? TestExecution.Running)?.runId
+		val providerToSave = when (event) {
+			is StudioEvent.SaveProvider -> event.profile
+			is StudioEvent.RetryProviderApiKeySave -> state.value.providers.firstOrNull { it.id == event.id }
+			else -> null
+		}
+		val providerSaveAllowed = providerToSave?.let { state.value.canSaveProvider(it) } ?: false
 		state.value = state.value.reduce(event)
 		when (event) {
 			is StudioEvent.ChangeThemeMode -> persistThemeMode(event.value)
@@ -263,7 +269,10 @@ private class StudioController(
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
 			StudioEvent.CopyInstallCommands -> copyInstallCommands()
 			StudioEvent.RefreshMcpStatus -> refreshMcpStatus()
-			is StudioEvent.SaveProvider -> saveProvider(event.profile)
+			is StudioEvent.SaveProvider -> if (providerSaveAllowed) saveProvider(event.profile)
+			StudioEvent.RetryProviderApiKeys -> loadApiKeys()
+			is StudioEvent.RetryProviderApiKeySave -> if (providerSaveAllowed) saveProvider(providerToSave)
+			is StudioEvent.RetryProviderApiKeyDelete -> if (state.value.providers.none { it.id == event.id }) deleteProviderApiKey(event.id)
 			is StudioEvent.RemoveProvider -> removeProvider(event.id)
 			is StudioEvent.CheckProvider -> checkProvider(event.id)
 			StudioEvent.RefreshDevices -> refreshDevices()
@@ -289,7 +298,6 @@ private class StudioController(
 			}
 			StudioEvent.CancelAgentRun -> cancelAgentRun()
 			is StudioEvent.GenerateTest, is StudioEvent.RegenerateTest, StudioEvent.GenerateConsoleTest -> generateTest()
-			StudioEvent.CopyGeneratedTest -> state.value.generatedTest?.generated?.let { copyToClipboard(it.source, "Generated test copied") }
 			StudioEvent.SaveGeneratedTest -> saveGeneratedTest()
 			StudioEvent.SteerAgentRun -> steerAgentRun()
 			else -> Unit
@@ -834,10 +842,10 @@ private class StudioController(
 	private fun loadApiKeys() = scope.launch {
 		val profiles = state.value.providers
 		val result = withContext(keychainDispatcher) { providerStore.loadApiKeys(profiles.map { it.id }) }
-		state.value = state.value.reduce(StudioEvent.ProviderApiKeysLoaded(result.keys))
+		state.value = state.value.reduce(StudioEvent.ProviderApiKeysLoaded(result.keys, result.failures.mapValues { it.value.credentialStorageMessage() }))
 		if (result.failures.isNotEmpty()) {
 			val names = profiles.filter { it.id in result.failures }.joinToString { it.name }
-			state.value = state.value.copy(notice = "Could not read API keys for $names from the keychain: ${result.failures.values.first().message}")
+			state.value = state.value.copy(notice = "Could not read API keys for $names. ${result.failures.values.first().credentialStorageMessage()}")
 		}
 	}
 
@@ -860,18 +868,31 @@ private class StudioController(
 	}
 
 	private fun saveProvider(profile: ProviderProfile) {
+		if (profile.id in state.value.providerApiKeyReadFailures) return
 		persistProfiles()
 		scope.launch {
 			runCatching { withContext(keychainDispatcher) { providerStore.saveApiKey(profile.id, profile.apiKey) } }
-				.onFailure { state.value = state.value.copy(notice = "Could not save the API key for ${profile.name} to the keychain: ${it.message}") }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ProviderApiKeySaveFinished(profile.id)) }
+				.onFailure {
+					if (it is CancellationException) throw it
+					state.value = state.value.reduce(StudioEvent.ProviderApiKeySaveFinished(profile.id, it.credentialStorageMessage()))
+				}
 		}
 	}
 
 	private fun removeProvider(id: String) {
 		persistProfiles()
+		deleteProviderApiKey(id)
+	}
+
+	private fun deleteProviderApiKey(id: String) {
 		scope.launch {
 			runCatching { withContext(keychainDispatcher) { providerStore.deleteApiKey(id) } }
-				.onFailure { state.value = state.value.copy(notice = "Removed the provider, but could not delete its API key from the keychain: ${it.message}") }
+				.onSuccess { state.value = state.value.reduce(StudioEvent.ProviderApiKeyDeleteFinished(id)) }
+				.onFailure {
+					if (it is CancellationException) throw it
+					state.value = state.value.reduce(StudioEvent.ProviderApiKeyDeleteFinished(id, it.credentialStorageMessage()))
+				}
 		}
 	}
 

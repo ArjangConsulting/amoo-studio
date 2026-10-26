@@ -2,7 +2,7 @@
 kotlin = "2.4.21"
 compose = "1.12.2"
 coroutines = "1.11.0"
-serialization = "1.11.0"
+serialization = "1.12.0"
 kover = "0.9.11"
 kmp-components = "0.2.0"
 credential-keychain = "0.1.1"

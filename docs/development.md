@@ -4,6 +4,7 @@
 
 - JDK 21
 - A local checkout of Amoo when exercising the real backend
+- A sibling `kmp-code-editor` checkout until its `0.1.0` release is published
 
 Build Amoo and launch Studio:
 
@@ -11,7 +12,7 @@ Build Amoo and launch Studio:
 cd ../mobile-testing
 swift build --product amoo
 cd ../amoo-studio
-AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
+AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew -PuseLocalCodeEditor=true :composeApp:run
 ```
 
 ## Local library checkouts
@@ -24,9 +25,25 @@ or `-PuseLocalCredentialKeychain=true`. Their default paths are `../KMPComponent
 
 `process-rpc-kotlin` automatically includes a sibling `../process-rpc-kotlin` checkout when present;
 override that with `-PuseLocalProcessRpc=true|false` and `-PlocalProcessRpcPath=<path>`.
-The unpublished `kmp-code-editor` works the same way with `../kmp-code-editor`,
-`-PuseLocalCodeEditor=true|false`, and `-PlocalCodeEditorPath=<path>`.
-CI and release packaging check out the source revision pinned in their workflow files.
+`kmp-code-editor` resolves the catalog dependency `com.arjangconsulting.codeeditor:code-editor:0.1.0`
+by default, even when `../kmp-code-editor` exists. Until that first release is published, opt into
+its source checkout explicitly with `-PuseLocalCodeEditor=true`; use
+`-PlocalCodeEditorPath=<path>` for another checkout. For example:
+
+```bash
+./gradlew -PuseLocalCodeEditor=true :composeApp:compileKotlinDesktop :composeApp:desktopTest
+./gradlew -PuseLocalCodeEditor=true :composeApp:packageDmg :composeApp:packagePkg
+```
+
+CI and release packaging explicitly enable substitution and check out editor commit `28790a5`,
+which includes controlled-value synchronization without history-resetting callback echoes.
+Publication-dependent follow-up: after `0.1.0` resolves from Maven Central, remove the editor
+checkout steps and both `ORG_GRADLE_PROJECT_useLocalCodeEditor` and
+`ORG_GRADLE_PROJECT_localCodeEditorPath` from CI/release workflows. Verify default dependency
+resolution, desktop tests/compilation, and native packaging before dropping the source fallback.
+Do not enable the editor's release gate or publish it as part of this substitution change.
+For IDE imports before publication, explicitly set `useLocalCodeEditor=true` in your local Gradle
+properties; the shared run configurations retain the catalog default.
 
 Without `AMOO_BINARY`, Studio searches packaged application resources and then `PATH`. An unavailable
 backend is represented in UI state and must never crash the desktop process.
@@ -82,14 +99,14 @@ approvals, accessible split adjustment, and keyboard zoom. It also renders all e
 light, dark, and 200% RTL configurations, writing PNGs under `composeApp/build/reports/ui-integration`.
 
 ```bash
-./gradlew :composeApp:desktopTest
-./gradlew :composeApp:compileKotlinDesktop
+./gradlew -PuseLocalCodeEditor=true :composeApp:desktopTest
+./gradlew -PuseLocalCodeEditor=true :composeApp:compileKotlinDesktop
 ```
 
-To verify the released UI and keychain artifacts without substituting sibling checkouts:
+To verify the released UI and keychain artifacts while explicitly substituting only the unpublished editor:
 
 ```bash
-./gradlew :composeApp:desktopTest :composeApp:compileKotlinDesktop -PuseLocalKmpComponents=false -PuseLocalCredentialKeychain=false
+./gradlew -PuseLocalCodeEditor=true :composeApp:desktopTest :composeApp:compileKotlinDesktop -PuseLocalKmpComponents=false -PuseLocalCredentialKeychain=false
 ```
 
 CI intentionally does not require a simulator or emulator. Before a release, exercise the real local
@@ -100,9 +117,33 @@ cd ../mobile-testing
 swift build --product amoo
 cd ../amoo-studio
 ./scripts/studio-protocol-smoke.py --require-device --exercise-tools
-AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
+AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew -PuseLocalCodeEditor=true :composeApp:run
 ```
 
 The smoke command verifies the handshake, health, device discovery, and MCP readiness against the
 real backend. Continue the interactive E2E pass in Studio by selecting the discovered device,
 building/installing the sample app, saving and reopening an `.amootest`, and running its plan.
+
+## Console and generated source
+
+The console passes `StudioState.runtimeContextRevision` as the editor's `languageServiceRevision`.
+Execution start, progress, completion, failure and cancellation, device selection/discovery, app
+changes, recording/session changes, catalog changes, and backend reconnects invalidate suggestions
+for unchanged command text. Tool calls/results from agent runs also invalidate them; mirror frames
+and presentation changes do not. Studio owns this revision and execution through `StudioEvent`;
+Amoo owns the runtime context and completion answers. Late service results cannot reopen a stale
+popup. Enter accepts a visible completion before a later Enter can submit the command. Invalid
+commands and running commands do not submit through the editor.
+
+Controlled history navigation changes the console value without generating input callbacks. An
+identical input echo also preserves the history index; an actual edit leaves history navigation.
+Short command and result snippets use `CodeSnippet`. Expanded structured results larger than 4,096
+characters or at least 20 lines use a 320 dp, wrapped, read-only `CodeEditor`; selection and copying
+operate on the full source while rendering stays bounded. Generated source uses a read-only editor
+with selected-step line highlighting, source reveal, and gutter clicks to select the mapped step.
+
+`ConsoleEditorIntegrationTest` exercises these boundaries with the actual editor, including late
+completion responses, full-source read-only copy and generated source rendering. Copy assertions
+use an isolated clipboard for repeatability. Captures are in
+`composeApp/build/reports/editor-integration/`. These desktop tests do not establish native mobile
+IME or screen-reader behavior; editor-native evidence lives in its `benchmarks/VERIFICATION.md`.

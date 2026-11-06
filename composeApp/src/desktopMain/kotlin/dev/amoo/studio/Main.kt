@@ -199,10 +199,10 @@ private class StudioController(
 			client.state.collect { processState ->
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
-					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(
-						connection = ConnectionState.Unavailable(processState.reason, canInstallAmoo = isAmooMissing()),
-					)
-					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).copy(connection = ConnectionState.Starting)
+					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).reduce(StudioEvent.ConnectionChanged(
+						ConnectionState.Unavailable(processState.reason, canInstallAmoo = isAmooMissing()),
+					))
+					ProcessRpcState.Starting, ProcessRpcState.Stopped -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).reduce(StudioEvent.ConnectionChanged(ConnectionState.Starting))
 				}
 			}
 		}
@@ -223,10 +223,10 @@ private class StudioController(
 	private suspend fun handshake() {
 		try {
 			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
-			state.value = state.value.copy(connection = connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities))
+			state.value = state.value.reduce(StudioEvent.ConnectionChanged(connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities)))
 			loadToolCatalog()
 		} catch (error: Exception) {
-			state.value = state.value.copy(connection = ConnectionState.Unavailable(error.message ?: "Handshake failed"))
+			state.value = state.value.reduce(StudioEvent.ConnectionChanged(ConnectionState.Unavailable(error.message ?: "Handshake failed")))
 		}
 	}
 
@@ -382,7 +382,7 @@ private class StudioController(
 		scope.launch {
 			runCatching { json.decodeFromJsonElement<OperationResult>(client.call(method, params)) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.DeviceOperationFinished(result.message, result.artifactPath)); if (refreshAfter) refreshDevices() }
-				.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Operation failed: ${it.message}") }
+				.onFailure { state.value = state.value.reduce(StudioEvent.DeviceOperationFailed("Operation failed: ${it.message}")) }
 		}
 	}
 

@@ -150,15 +150,33 @@ private fun stepCount(count: Int) = if (count == 1) "1 step" else "$count steps"
 		}
 	}
 	if (details != null) {
-		DisclosureCard(showDetails, { showDetails = it }, summary = summary, detail = { CodeSnippet(details, language = JsonRules, softWrap = true) })
+		DisclosureCard(showDetails, { showDetails = it }, summary = summary, detail = { StructuredConsoleResult(details) })
 	} else ThemeCard { Row(horizontalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small), content = summary) }
+}
+
+@Composable internal fun StructuredConsoleResult(details: String) {
+	if (details.length <= 4096 && details.count { it == '\n' } < 20) {
+		CodeSnippet(details, language = JsonRules, softWrap = true)
+	} else {
+		CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+			CodeEditor(
+				value = details,
+				onValueChange = {},
+				modifier = Modifier.fillMaxWidth().height(320.dp),
+				language = JsonRules,
+				readOnly = true,
+				labels = CodeEditorLabels(editorDescription = "Structured command result"),
+				options = CodeEditorOptions(softWrap = true, highlightCurrentLine = false),
+			)
+		}
+	}
 }
 
 /**
  * The console line: a single-line code editor with the console language's highlighting, completion
  * (including elements on the device's screen when Amoo supports it), and inline diagnostics.
  */
-@Composable private fun ConsoleInput(state: StudioState, canRun: Boolean, onEvent: (StudioEvent) -> Unit) {
+@Composable internal fun ConsoleInput(state: StudioState, canRun: Boolean, onEvent: (StudioEvent) -> Unit) {
 	val assist = LocalReplAssist.current
 	val current by rememberUpdatedState(state)
 	val service = remember(assist) { ConsoleLanguageService({ current.toolCatalog }, { current.devices }, assist) }
@@ -172,6 +190,7 @@ private fun stepCount(count: Int) = if (count == 1) "1 step" else "$count steps"
 				modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
 				language = rules,
 				languageService = service,
+				languageServiceRevision = state.runtimeContextRevision,
 				readOnly = running,
 				singleLine = true,
 				onSubmit = { if (canRun && it.isNotBlank() && !running) onEvent(StudioEvent.ExecuteConsoleCommand) },

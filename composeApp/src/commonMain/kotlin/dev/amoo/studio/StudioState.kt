@@ -37,6 +37,8 @@ data class StudioState(
 	val providerApiKeyDeletionFailures: Map<String, String> = emptyMap(),
 	val chat: ChatState = ChatState(),
 	val console: ConsoleState = ConsoleState(),
+	/** Changes when Amoo runtime context can invalidate console suggestions for unchanged text. */
+	val runtimeContextRevision: Long = 0,
 	val notice: String? = null,
 	val devices: List<StudioDevice> = emptyList(),
 	val selectedDeviceId: String? = null,
@@ -267,6 +269,7 @@ sealed interface StudioEvent {
 	data class SelectSection(val section: StudioSection) : StudioEvent
 	data class ChangeThemeMode(val value: ThemeMode) : StudioEvent
 	data object RetryConnection : StudioEvent
+	data class ConnectionChanged(val value: ConnectionState) : StudioEvent
 	data object RequestInstallAmoo : StudioEvent
 	data object InstallAmooStarted : StudioEvent
 	data class InstallAmooFinished(val message: String) : StudioEvent
@@ -372,6 +375,7 @@ sealed interface StudioEvent {
 	data object RequestResetAppData : StudioEvent
 	data class ResolveApproval(val approved: Boolean) : StudioEvent
 	data class DeviceOperationStarted(val message: String) : StudioEvent
+	data class DeviceOperationFailed(val message: String) : StudioEvent
 	data class DeviceOperationFinished(val message: String, val artifact: String? = null) : StudioEvent
 	data class MirrorStarting(val deviceId: String) : StudioEvent
 	data class MirrorFrameReceived(val deviceId: String, val frame: DeviceFrame, val framesPerSecond: Double) : StudioEvent
@@ -400,9 +404,32 @@ sealed interface StudioEvent {
 	data object SaveGeneratedTest : StudioEvent
 }
 
-fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
+fun StudioState.reduce(event: StudioEvent): StudioState {
+	val updated = reduceEvent(event)
+	val contextChanged = connection != updated.connection || devices != updated.devices ||
+		selectedDeviceId != updated.selectedDeviceId || toolCatalog != updated.toolCatalog ||
+		appId != updated.appId || lastSessionId != updated.lastSessionId ||
+		console.recording != updated.console.recording
+	val executionChanged = when (event) {
+		StudioEvent.RetryConnection, is StudioEvent.ConnectionChanged,
+		StudioEvent.ConsoleCommandStarted, is StudioEvent.ConsoleCommandFinished, StudioEvent.CancelConsoleCommand,
+		is StudioEvent.DeviceOperationStarted, is StudioEvent.DeviceOperationFinished, is StudioEvent.DeviceOperationFailed,
+		is StudioEvent.TestRunStarted, is StudioEvent.TestRunProgress, is StudioEvent.TestRunFinished,
+		is StudioEvent.TestRunFailed, StudioEvent.CancelTestRun, is StudioEvent.AgentRunStarted, is StudioEvent.AgentRunFailed,
+		-> true
+		is StudioEvent.AgentEventReceived -> agentRun != updated.agentRun && event.event.kind in setOf(
+			AgentEventKind.SessionStarted, AgentEventKind.ToolCall, AgentEventKind.ToolResult, AgentEventKind.Finished,
+		)
+		is StudioEvent.AgentEventsReplayed -> agentRun != updated.agentRun
+		else -> false
+	}
+	return if (contextChanged || executionChanged) updated.copy(runtimeContextRevision = runtimeContextRevision + 1) else updated
+}
+
+private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
 	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
+	is StudioEvent.ConnectionChanged -> copy(connection = event.value)
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
 	StudioEvent.RequestInstallAmoo -> copy(pendingApproval = PendingApproval(
 		"Install Amoo via Homebrew?",
@@ -517,7 +544,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
 	StudioEvent.ClearChat -> copy(chat = ChatState())
 	StudioEvent.RetryLastChat -> copy(chat = chat.copy(input = chat.messages.lastOrNull { it.role == ChatRole.User }?.content.orEmpty(), lastError = null))
-	is StudioEvent.ChangeConsoleInput -> copy(console = console.copy(input = event.value, historyIndex = null))
+	is StudioEvent.ChangeConsoleInput -> if (event.value == console.input) this else copy(console = console.copy(input = event.value, historyIndex = null))
 	is StudioEvent.ToolCatalogLoaded -> copy(
 		toolCatalog = event.catalog,
 		operationDraft = operationDraft.takeIf { event.catalog.tool(it.tool)?.planTool != null } ?: ToolOperationDraft(event.catalog.planTools.firstOrNull()?.name ?: operationDraft.tool),
@@ -564,6 +591,7 @@ fun StudioState.reduce(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.ChangeSchemeOrModule -> copy(schemeOrModule = event.value)
 	StudioEvent.RequestResetAppData -> copy(pendingApproval = PendingApproval("Erase app data?", "This removes all local data for $appId on the selected device. The action cannot be undone.", ApprovedAction.ResetAppData, confirmLabel = "Erase data"))
 	is StudioEvent.ResolveApproval -> copy(pendingApproval = null)
+	is StudioEvent.DeviceOperationFailed -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message)
 	is StudioEvent.DeviceOperationStarted -> copy(deviceOperation = DeviceOperation.Working(event.message), notice = null)
 	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message, lastBuildArtifact = event.artifact ?: lastBuildArtifact)
 	is StudioEvent.MirrorStarting -> copy(mirror = mirror.copy(status = MirrorStatus.Starting, deviceId = event.deviceId, frame = mirror.frame.takeIf { mirror.deviceId == event.deviceId }))

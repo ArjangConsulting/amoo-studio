@@ -22,14 +22,16 @@ The reusable subprocess transport is the versioned
 
 ## Development
 
-Clone Amoo and Amoo Studio as siblings, then build the Swift backend:
+Clone Amoo and Amoo Studio as siblings, then build the Swift backend. Until editor `0.1.0`
+is published, also keep a sibling `kmp-code-editor` checkout and explicitly enable it as shown
+below. See [local library setup](docs/development.md#local-library-checkouts) for path overrides.
 
 ```bash
 cd ../mobile-testing
 swift build --product amoo
 
 cd ../amoo-studio
-AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew :composeApp:run
+AMOO_BINARY="$PWD/../mobile-testing/.build/debug/amoo" ./gradlew -PuseLocalCodeEditor=true :composeApp:run
 ```
 
 Alternatively, install a released `amoo` build via Homebrew and let Studio find it on `PATH`:
@@ -37,7 +39,7 @@ Alternatively, install a released `amoo` build via Homebrew and let Studio find 
 ```bash
 brew tap arjangconsulting/tap
 brew install amoo
-./gradlew :composeApp:run
+./gradlew -PuseLocalCodeEditor=true :composeApp:run
 ```
 
 This flow works with Homebrew on macOS and Linux. Packaged desktop launches also check the standard

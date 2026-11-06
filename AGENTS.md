@@ -39,6 +39,11 @@ and companion lifecycle belong in Amoo and are reached through `amoo studio serv
 
 ## Commands
 
+The editor dependency resolves from the catalog by default. Until `0.1.0` is published, commands
+require an explicit `-PuseLocalCodeEditor=true` and a sibling `../kmp-code-editor` checkout
+(or `-PlocalCodeEditorPath=<path>`). CI/release workflows explicitly opt into their pinned checkout.
+See `docs/development.md` for the publication-dependent removal of that fallback.
+
 ```bash
 ./gradlew :composeApp:compileKotlinDesktop
 ./gradlew :composeApp:desktopTest

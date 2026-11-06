@@ -27,7 +27,12 @@ actions. Composables remain stateless aside from strictly visual state.
 - Compose Multiplatform renders the desktop interface.
 - `kmp-code-editor` (`com.arjangconsulting.codeeditor:code-editor`) renders the console line, generated test source, and read-only
   code snippets: LSP-shaped completion and diagnostics, line highlights, and a virtualized
-  Compose engine.
+  Compose engine. Studio owns a monotonic runtime-context revision in `StudioState` and passes it
+  to the console's language service so unchanged command text cannot retain device/session results
+  after execution, selection changes, or backend resets. Small snippets stay lightweight; large
+  structured results use a bounded, wrapped read-only editor with full-source selection/copy.
+  Generated source maps selected steps to line highlights and reveal requests; gutter clicks select
+  the corresponding operation. Amoo continues to own execution and runtime completion data.
 - `amoo device stream`, spawned as its own process, feeds the live device pane without blocking
   the protocol stream.
 - A released Amoo executable is embedded as an OS/architecture-specific resource for distribution.

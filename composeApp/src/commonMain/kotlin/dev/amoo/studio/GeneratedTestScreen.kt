@@ -162,14 +162,14 @@ const val TESTS_GENERATE_CAPABILITY = "tests.generate"
 	}
 }
 
-@Composable private fun GeneratedSourceView(generated: GeneratedTestState, source: GeneratedSource, onEvent: (StudioEvent) -> Unit, modifier: Modifier) {
+@Composable internal fun GeneratedSourceView(generated: GeneratedTestState, source: GeneratedSource, onEvent: (StudioEvent) -> Unit, modifier: Modifier) {
 	val language = when (source.language) {
 		"swift" -> SwiftRules
 		"kotlin" -> KotlinRules
 		else -> PlainText
 	}
 	val selectedSpan = generated.selectedOperationId?.let(generated::span)
-	val highlights = remember(selectedSpan, source) {
+	val highlights = remember(generated, source) {
 		buildList {
 			selectedSpan?.let { add(LineHighlight((it.startLine - 1)..(it.endLine - 1), LineHighlightRole.SELECTED)) }
 			generated.operations.forEach { operation ->

@@ -26,6 +26,7 @@ or `-PuseLocalCredentialKeychain=true`. Their default paths are `../KMPComponent
 override that with `-PuseLocalProcessRpc=true|false` and `-PlocalProcessRpcPath=<path>`.
 The unpublished `kmp-code-editor` works the same way with `../kmp-code-editor`,
 `-PuseLocalCodeEditor=true|false`, and `-PlocalCodeEditorPath=<path>`.
+CI and release packaging check out the source revision pinned in their workflow files.
 
 Without `AMOO_BINARY`, Studio searches packaged application resources and then `PATH`. An unavailable
 backend is represented in UI state and must never crash the desktop process.
@@ -48,7 +49,7 @@ operations on either host.
 
 ## Verification
 
-KMPComponents is pinned to `0.2.0`, and provider API keys use credential-keychain-kotlin `0.1.1`.
+KMPComponents is pinned to `0.2.1`, and provider API keys use credential-keychain-kotlin `0.1.1`.
 Their versions are managed in `gradle/libs.versions.toml`. API keys stay in the OS keychain;
 provider preferences contain only profile metadata. Keychain access runs on a serialized IO dispatcher.
 
@@ -71,7 +72,7 @@ to remediation without displaying raw diagnostics. Read failures block edits and
 read, write, and deletion failures have explicit retry actions in Settings. API keys preserve their
 exact value, including surrounding whitespace. Blank keys delete only that profile's entry.
 
-Desktop tests use the published KotlinTestCommons `0.1.0` `core` and `compose` artifacts for temporary
+Desktop tests use the published KotlinTestCommons `0.2.0` `core` and `compose` artifacts for temporary
 directories, bounded flow observation, scripted responders, event recording, serialization checks,
 and UI waits, input verification, target-size assertions, and PNG capture. These dependencies are
 limited to `desktopTest`.

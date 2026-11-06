@@ -23,10 +23,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ArjangConsulting/kmp-code-editor
-          ref: 41f3df4342ba278bcec9c614d02b5a0ed693bd1e
+          ref: 098d2bec8a4b7997a42a6785fb3f149cae1d759a
           path: .ci/kmp-code-editor
           persist-credentials: false
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -45,10 +45,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ArjangConsulting/kmp-code-editor
-          ref: 41f3df4342ba278bcec9c614d02b5a0ed693bd1e
+          ref: 098d2bec8a4b7997a42a6785fb3f149cae1d759a
           path: .ci/kmp-code-editor
           persist-credentials: false
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
           java-version: "21"
@@ -68,10 +68,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ArjangConsulting/kmp-code-editor
-          ref: 41f3df4342ba278bcec9c614d02b5a0ed693bd1e
+          ref: 098d2bec8a4b7997a42a6785fb3f149cae1d759a
           path: .ci/kmp-code-editor
           persist-credentials: false
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
           java-version: "21"

@@ -35,6 +35,7 @@ jobs:
             outputs: composeApp/build/compose/binaries/main/deb/*
     runs-on: ${{ matrix.runner }}
     env:
+      ORG_GRADLE_PROJECT_useLocalCodeEditor: "true"
       ORG_GRADLE_PROJECT_localCodeEditorPath: ${{ github.workspace }}/.ci/kmp-code-editor
       GH_TOKEN: ${{ github.token }}
       AMOO_ASSET: amoo-${{ inputs.amoo_tag }}-${{ matrix.amoo_flavor }}.tar.gz
@@ -44,7 +45,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ArjangConsulting/kmp-code-editor
-          ref: 098d2bec8a4b7997a42a6785fb3f149cae1d759a
+          ref: 28790a500c93efc717acf03ab475f988e236087d
           path: .ci/kmp-code-editor
           persist-credentials: false
       - uses: actions/setup-java@v6.2.0

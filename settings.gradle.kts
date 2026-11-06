@@ -62,12 +62,8 @@ if (useLocalProcessRpc) {
 	}
 }
 
-// kmp-code-editor (com.arjangconsulting.codeeditor:code-editor) resolves from Maven Central by default. A
-// sibling checkout is included automatically when present; -PuseLocalCodeEditor=true|false overrides
-// that, and -PlocalCodeEditorPath=<path> points at another checkout.
 val localCodeEditor = file(providers.gradleProperty("localCodeEditorPath").orNull ?: "../kmp-code-editor")
-val useLocalCodeEditor = providers.gradleProperty("useLocalCodeEditor").orNull?.toBoolean()
-	?: localCodeEditor.resolve("settings.gradle.kts").isFile
+val useLocalCodeEditor = providers.gradleProperty("useLocalCodeEditor").map(String::toBoolean).orElse(false).get()
 if (useLocalCodeEditor) {
 	require(localCodeEditor.resolve("settings.gradle.kts").isFile) {
 		"useLocalCodeEditor requires kmp-code-editor at ${localCodeEditor.path}"

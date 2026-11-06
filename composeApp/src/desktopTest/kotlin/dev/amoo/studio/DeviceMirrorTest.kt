@@ -221,7 +221,7 @@ class DeviceMirrorTest {
 
 	private suspend inline fun <reified T : StudioEvent> Channel<StudioEvent>.receiveUntil(crossinline matches: (T) -> Boolean = { true }): T {
 		val observation = observeFlow(receiveAsFlow(), maxCount = 100, timeout = 5.seconds) { it is T && matches(it) }
-		assertEquals(FlowObservation.End.Matched, observation.end, "Expected ${T::class.simpleName}, observed ${observation.values}")
+		assertEquals(FlowObservation.End.MATCHED, observation.end, "Expected ${T::class.simpleName}, observed ${observation.values}")
 		return observation.values.last() as T
 	}
 

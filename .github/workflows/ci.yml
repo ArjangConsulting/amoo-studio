@@ -46,13 +46,20 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Amoo
+      - name: Download the latest verified Amoo release
+        # The release tarball is what Studio embeds. Homebrew is avoided here: its bottle relinking
+        # can fail on the runner for reasons unrelated to the protocol under test.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          brew tap arjangconsulting/tap
-          brew trust arjangconsulting/tap
-          brew install amoo
+          set -euo pipefail
+          dir="$RUNNER_TEMP/amoo"
+          mkdir -p "$dir"
+          gh release download --repo ArjangConsulting/mobile-testing --pattern 'amoo-*-macos-universal.tar.gz*' --dir "$dir"
+          (cd "$dir" && shasum -a 256 -c ./*.sha256 && tar -xzf ./amoo-*-macos-universal.tar.gz)
+          test -x "$dir/amoo"
       - name: Exercise the real studio protocol
-        run: python3 scripts/studio-protocol-smoke.py --amoo "$(brew --prefix)/bin/amoo"
+        run: python3 scripts/studio-protocol-smoke.py --amoo "$RUNNER_TEMP/amoo/amoo"
 
   package-macos:
     runs-on: macos-15

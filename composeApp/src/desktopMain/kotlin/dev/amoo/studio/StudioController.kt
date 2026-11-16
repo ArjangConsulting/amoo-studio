@@ -224,7 +224,9 @@ internal class StudioController(
 		persistSession()
 		scope.launch {
 			rpc.state.collect { processState ->
-				log.info("process.state", processState::class.simpleName.orEmpty())
+				// Unavailable carries the last lines Amoo wrote to stderr, which is the only crash detail Studio can keep until the transport exposes the stream.
+				if (processState is ProcessRpcState.Unavailable) log.warn("process.state", "Unavailable reason=${processState.reason.replace("\n", " | ")}")
+				else log.info("process.state", processState::class.simpleName.orEmpty())
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
 					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).reduce(StudioEvent.ConnectionChanged(

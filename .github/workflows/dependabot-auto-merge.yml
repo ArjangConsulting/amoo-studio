@@ -45,6 +45,13 @@ jobs:
               continue
             fi
 
+            # Dependabot records each update's semver level in its commit message; majors need a human.
+            if gh api --paginate "repos/$GH_REPO/pulls/$number/commits" --jq '.[].commit.message' \
+              | grep -q 'update-type: version-update:semver-major'; then
+              echo "PR #$number contains a major update and needs a manual review."
+              continue
+            fi
+
             head_sha=$(jq -r '.head.sha' <<< "$pull_request")
             workflow_runs=$(gh api --paginate --slurp "repos/$GH_REPO/actions/runs?head_sha=$head_sha&event=pull_request&per_page=100" \
               | jq -r '[.[].workflow_runs[]] | sort_by(.id) | group_by(.workflow_id) | map(max_by(.id))')

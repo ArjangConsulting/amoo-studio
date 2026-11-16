@@ -45,11 +45,9 @@ if (useLocalCredentialKeychain) {
 }
 
 // process-rpc-kotlin is resolved from JitPack by default. Point the build at a local checkout with
-// -PuseLocalProcessRpc=true (optionally -PlocalProcessRpcPath=...); when the property is unset, a
-// sibling checkout is used automatically if one exists.
+// -PuseLocalProcessRpc=true (optionally -PlocalProcessRpcPath=...), like the other local libraries.
 val localProcessRpc = file(providers.gradleProperty("localProcessRpcPath").orNull ?: "../process-rpc-kotlin")
-val useLocalProcessRpc = providers.gradleProperty("useLocalProcessRpc").orNull?.toBoolean()
-	?: localProcessRpc.resolve("settings.gradle.kts").isFile
+val useLocalProcessRpc = providers.gradleProperty("useLocalProcessRpc").map(String::toBoolean).orElse(false).get()
 if (useLocalProcessRpc) {
 	require(localProcessRpc.resolve("settings.gradle.kts").isFile) {
 		"useLocalProcessRpc requires process-rpc-kotlin at ${localProcessRpc.path}"

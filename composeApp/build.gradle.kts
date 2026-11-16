@@ -42,7 +42,7 @@ kotlin {
 		}
 		named("desktopMain") {
 			dependencies {
-				implementation("com.github.maniramezan:process-rpc-kotlin:0.2.0")
+				implementation(libs.process.rpc)
 				implementation(libs.credential.keychain)
 				implementation(compose.desktop.currentOs)
 				implementation(libs.coroutines.swing)
@@ -80,7 +80,7 @@ compose.desktop {
 	application {
 		mainClass = "dev.amoo.studio.MainKt"
 		nativeDistributions {
-			targetFormats(TargetFormat.Dmg, TargetFormat.Pkg, TargetFormat.Deb, TargetFormat.Rpm)
+			targetFormats(TargetFormat.Dmg, TargetFormat.Pkg, TargetFormat.Deb)
 			packageName = "Amoo Studio"
 			packageVersion = project.version.toString().substringBefore('-')
 			description = "Desktop client for Amoo mobile testing"
@@ -91,6 +91,13 @@ compose.desktop {
 				appCategory = "public.app-category.developer-tools"
 				minimumSystemVersion = "15.0"
 				iconFile.set(project.file("app-resources/icon.icns"))
+			}
+			linux {
+				iconFile.set(project.file("app-resources/icons/icon_512.png"))
+				debMaintainer = "Amoo Studio <noreply@github.com>"
+				menuGroup = "Development"
+				appCategory = "Development"
+				shortcut = true
 			}
 		}
 	}

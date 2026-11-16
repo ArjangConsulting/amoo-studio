@@ -10,6 +10,22 @@ run Android workflows through the same Amoo/ShipItSwifty process boundary.
 The reusable subprocess transport is the versioned
 [process-rpc-kotlin](https://github.com/maniramezan/process-rpc-kotlin) library dependency.
 
+## Install
+
+Release builds are published on the [GitHub Releases](https://github.com/ArjangConsulting/amoo-studio/releases)
+page and embed a verified Amoo runtime, so nothing else needs installing for iOS and Android testing
+on the same machine.
+
+| Platform | Package | Requirements |
+| --- | --- | --- |
+| macOS | `.dmg` or `.pkg` | Apple Silicon, macOS 15 or later |
+| Linux | `.deb` | x64, a running Secret Service and `libsecret-tools` (`sudo apt install libsecret-tools`) for provider API keys; Android workflows only |
+
+Each release lists `SHA256SUMS`; verify a download with `shasum -a 256 -c SHA256SUMS`. Studio keeps
+its files in `~/Library/Application Support/Amoo Studio` on macOS and `~/.local/share/amoo-studio`
+on Linux: the extracted Amoo runtime, the AI-testing history, and a rotating `logs/` folder. Use
+**Settings > Reveal logs** to attach the log to a bug report; it never contains API keys or chat text.
+
 ## Documentation
 
 - [Architecture](Architecture.md)

@@ -7,6 +7,7 @@ kover = "0.9.11"
 kmp-components = "0.2.1"
 credential-keychain = "0.1.1"
 testcommons = "0.2.0"
+process-rpc = "0.2.0"
 
 [libraries]
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -18,6 +19,7 @@ compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
 compose-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
 kmp-components = { module = "io.github.maniramezan.kmpcomponents:components", version.ref = "kmp-components" }
+process-rpc = { module = "com.github.maniramezan:process-rpc-kotlin", version.ref = "process-rpc" }
 credential-keychain = { module = "io.github.maniramezan:credential-keychain-kotlin", version.ref = "credential-keychain" }
 testcommons-core = { module = "io.github.maniramezan.testcommons:core", version.ref = "testcommons" }
 testcommons-compose = { module = "io.github.maniramezan.testcommons:compose", version.ref = "testcommons" }

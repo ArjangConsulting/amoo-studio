@@ -3,10 +3,6 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      studio_tag:
-        description: Studio release tag, bare SemVer (for example 1.0.0)
-        required: true
-        type: string
       amoo_tag:
         description: Amoo release tag (bare SemVer, for example 0.3.0) whose verified runtime will be embedded
         required: true
@@ -15,8 +11,55 @@ on:
 permissions:
   contents: write
 
+env:
+  ORG_GRADLE_PROJECT_useLocalCodeEditor: "true"
+  ORG_GRADLE_PROJECT_localCodeEditorPath: ${{ github.workspace }}/.ci/kmp-code-editor
+
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AMOO_TAG: ${{ inputs.amoo_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read and validate the release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          version="$(sed -n 's/^studioVersion=//p' gradle.properties)"
+          [[ "$version" =~ $semver ]] || { echo "studioVersion '$version' in gradle.properties is not bare SemVer"; exit 1; }
+          [[ "$AMOO_TAG" =~ $semver ]] || { echo "amoo_tag '$AMOO_TAG' is not bare SemVer"; exit 1; }
+          if gh release view "$version" > /dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$version" > /dev/null 2>&1; then
+            echo "A release or tag named $version already exists; bump studioVersion in gradle.properties first"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ArjangConsulting/kmp-code-editor
+          ref: 28790a500c93efc717acf03ab475f988e236087d
+          path: .ci/kmp-code-editor
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - run: ./gradlew :composeApp:desktopTest :composeApp:koverVerify
+
   package:
+    needs: [prepare, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -27,32 +70,36 @@ jobs:
             amoo_flavor: macos-universal
             package_tasks: :composeApp:packageDmg :composeApp:packagePkg
             outputs: composeApp/build/compose/binaries/main/{dmg,pkg}/*
+            launcher: composeApp/build/compose/binaries/main/app/Amoo Studio.app/Contents/MacOS/Amoo Studio
+            log_directory: ~/Library/Application Support/Amoo Studio/logs
           - runner: ubuntu-24.04
             platform: linux
             arch: x64
             amoo_flavor: linux-static
             package_tasks: :composeApp:packageDeb
             outputs: composeApp/build/compose/binaries/main/deb/*
+            launcher: composeApp/build/compose/binaries/main/app/Amoo Studio/bin/Amoo Studio
+            log_directory: ~/.local/share/amoo-studio/logs
     runs-on: ${{ matrix.runner }}
     env:
-      ORG_GRADLE_PROJECT_useLocalCodeEditor: "true"
-      ORG_GRADLE_PROJECT_localCodeEditorPath: ${{ github.workspace }}/.ci/kmp-code-editor
       GH_TOKEN: ${{ github.token }}
       AMOO_ASSET: amoo-${{ inputs.amoo_tag }}-${{ matrix.amoo_flavor }}.tar.gz
       AMOO_TAG: ${{ inputs.amoo_tag }}
+      LAUNCHER: ${{ matrix.launcher }}
+      LOG_DIRECTORY: ${{ matrix.log_directory }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ArjangConsulting/kmp-code-editor
           ref: 28790a500c93efc717acf03ab475f988e236087d
           path: .ci/kmp-code-editor
           persist-credentials: false
-      - uses: actions/setup-java@v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Download and verify Amoo
         # Studio embeds amoo's whole release tarball (the executable plus prebuilt companions) and
         # extracts it on first launch; see composeApp/app-resources/README.md.
@@ -68,22 +115,60 @@ jobs:
           printf '%s  amoo-runtime.tar.gz\n' "$actual" > "$staging/amoo-runtime.tar.gz.sha256"
       - name: Package Studio
         run: ./gradlew :composeApp:verifyEmbeddedAmoo ${{ matrix.package_tasks }}
-      - uses: actions/upload-artifact@v7
+      - name: Install a virtual display
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libsecret-tools
+      - name: Launch the packaged app and wait for the Amoo handshake
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_directory="${LOG_DIRECTORY/#\~/$HOME}"
+          rm -rf "$log_directory"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run --auto-servernum "$LAUNCHER" &
+          else
+            "$LAUNCHER" &
+          fi
+          app=$!
+          for _ in $(seq 1 90); do
+            if grep -qs "handshake.ok" "$log_directory"/studio.*.log; then
+              echo "Packaged Studio reached the Amoo handshake"
+              kill "$app" 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Packaged Studio never reached the Amoo handshake"
+          cat "$log_directory"/studio.*.log || true
+          kill "$app" 2>/dev/null || true
+          exit 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Amoo-Studio-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ matrix.outputs }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: release-logs-${{ matrix.platform }}
+          path: |
+            composeApp/build/compose/logs/
+          if-no-files-found: ignore
 
   draft-release:
-    needs: package
+    needs: [prepare, package]
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: release-artifacts
           merge-multiple: true
       - name: Create draft GitHub release
-        run: gh release create "${{ inputs.studio_tag }}" release-artifacts/* --draft --target "$GITHUB_SHA" --generate-notes --title "Amoo Studio ${{ inputs.studio_tag }}"
+        run: |
+          set -euo pipefail
+          (cd release-artifacts && sha256sum * > SHA256SUMS)
+          gh release create "$VERSION" release-artifacts/* --draft --target "$GITHUB_SHA" --generate-notes --title "Amoo Studio $VERSION"

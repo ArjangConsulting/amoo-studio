@@ -54,7 +54,7 @@ an API-key environment-variable name, and an optional `apiKey`. Studio sends `ap
 advertises the `providers.apiKey` capability; Amoo uses it in preference to the environment variable,
 never persists or logs it, and owns provider networking. Against older Amoo builds Studio omits the
 key and asks the user to configure the environment variable instead. `providers.check` accepts the
-same profile shape. `repl.execute` and `tests.*` carry only the provider ID and never need the key. Session and report methods will be added to the Swift-owned protocol.
+same profile shape. `repl.execute` and `tests.*` carry only the provider ID and never need the key. Session, run, and report methods are part of the Swift-owned protocol above;
 Their Kotlin DTOs remain boundary models, not alternate implementations of Amoo behavior.
 
 `devices.create` accepts `platform`, `name`, `runtime`, and `deviceType`, returning the standard

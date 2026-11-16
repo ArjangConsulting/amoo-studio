@@ -27,7 +27,7 @@ will translate these steps into its provider-neutral tools.
 
 Readers must reject unsupported major `formatVersion` values. New optional fields may be added within
 a version; readers should ignore fields they do not understand. Step IDs are stable within a file and
-exist for UI identity and future report correlation.
+exist for UI identity and for correlating steps with run progress and reports.
 
 Optional `requirements` describe the app, project, or device needed to run the test. An optional
 `compiledPlan` may cache backend-generated tool operations together with its compiler identity and
@@ -41,8 +41,10 @@ still readable for compatibility but is not used to represent new mobile actions
 
 Studio's Console and operation editor append validated mobile commands to
 `compiledPlan.toolOperations`; the test editor displays the ordered plan and allows individual
-operations to be removed. Test execution remains disabled until an executable plan exists, preventing
-authored intent from being reported as if it had run.
+operations to be removed. Running a test sends it to Amoo (`tests.start`, or `tests.run` on older
+builds) and stays disabled until an executable plan exists, so authored intent is never reported as
+if it had run. Saves are atomic: Studio writes a temporary file beside the target and renames it, so
+an interrupted save never leaves a truncated `.amootest`.
 
 Provider profiles are not part of `.amootest` files. Studio stores provider endpoints, model names,
 and API-key environment-variable names in user preferences. API key values are never written to

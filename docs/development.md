@@ -23,8 +23,8 @@ or `-PuseLocalCredentialKeychain=true`. Their default paths are `../KMPComponent
 `../credential-keychain-kotlin`; override them with `-PlocalKmpComponentsPath=<path>` and
 `-PlocalCredentialKeychainPath=<path>`.
 
-`process-rpc-kotlin` automatically includes a sibling `../process-rpc-kotlin` checkout when present;
-override that with `-PuseLocalProcessRpc=true|false` and `-PlocalProcessRpcPath=<path>`.
+`process-rpc-kotlin` resolves its pinned release from JitPack the same way. Opt into a sibling
+`../process-rpc-kotlin` checkout with `-PuseLocalProcessRpc=true` and `-PlocalProcessRpcPath=<path>`.
 `kmp-code-editor` resolves the catalog dependency `com.arjangconsulting.codeeditor:code-editor:0.1.0`
 by default, even when `../kmp-code-editor` exists. Until that first release is published, opt into
 its source checkout explicitly with `-PuseLocalCodeEditor=true`; use

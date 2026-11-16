@@ -13,6 +13,6 @@ internal class AmooTestFileStore(
 	}
 
 	fun save(test: AmooTest, file: File) {
-		file.writeText(json.encodeToString(test))
+		writeAtomically(file, json.encodeToString(test))
 	}
 }

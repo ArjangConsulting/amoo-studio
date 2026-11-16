@@ -59,6 +59,8 @@ data class StudioState(
 	val generatedTest: GeneratedTestState? = null,
 	/** Fraction of the workbench width given to the console or agent feed; the device pane gets the rest. */
 	val workbenchSplit: Float = DEFAULT_WORKBENCH_SPLIT,
+	/** Set once the user has confirmed quitting (or there was nothing to lose); the desktop host then exits. */
+	val exitRequested: Boolean = false,
 )
 
 const val DEFAULT_WORKBENCH_SPLIT = 0.6f
@@ -250,7 +252,12 @@ sealed interface ApprovedAction {
 	data object InstallAmoo : ApprovedAction
 	/** An agent's destructive tool call waiting for the user. */
 	data class AgentTool(val runId: String, val callId: String) : ApprovedAction
+	/** Unsaved test changes that [then] would throw away. */
+	data class DiscardTest(val then: DiscardContinuation) : ApprovedAction
 }
+
+/** What happens to the open test once the user agrees to discard its unsaved changes. */
+enum class DiscardContinuation { NewTest, OpenTest, Quit }
 
 const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
 const val AMOO_HOMEBREW_FORMULA = "amoo"
@@ -277,6 +284,8 @@ sealed interface StudioEvent {
 	data object CopyInstallCommands : StudioEvent
 	data object NewTest : StudioEvent
 	data object OpenTest : StudioEvent
+	data object RequestQuit : StudioEvent
+	data object RevealLogs : StudioEvent
 	data object SaveTest : StudioEvent
 	data object SaveTestAs : StudioEvent
 	data class TestLoaded(val test: AmooTest, val path: String) : StudioEvent
@@ -426,6 +435,22 @@ fun StudioState.reduce(event: StudioEvent): StudioState {
 	return if (contextChanged || executionChanged) updated.copy(runtimeContextRevision = runtimeContextRevision + 1) else updated
 }
 
+/** Asks before [then] discards unsaved test edits; with nothing to lose it proceeds straight away. */
+private fun StudioState.guardingUnsavedTest(then: DiscardContinuation): StudioState =
+	if (!isTestDirty) continuingAfterDiscard(then) else copy(pendingApproval = PendingApproval(
+		"Discard unsaved changes?",
+		"\"${test.name}\" has changes that are not saved. Discarding them cannot be undone.",
+		ApprovedAction.DiscardTest(then),
+		confirmLabel = "Discard changes",
+	))
+
+/** OpenTest changes nothing here: the desktop host shows the file chooser, and a loaded test replaces this one. */
+private fun StudioState.continuingAfterDiscard(then: DiscardContinuation): StudioState = when (then) {
+	DiscardContinuation.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
+	DiscardContinuation.OpenTest -> this
+	DiscardContinuation.Quit -> copy(exitRequested = true)
+}
+
 private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
 	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
@@ -441,8 +466,10 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	is StudioEvent.InstallAmooFinished -> copy(amooInstall = AmooInstallState.Idle, notice = event.message)
 	is StudioEvent.InstallAmooFailed -> copy(amooInstall = AmooInstallState.Failed(event.message), notice = event.message)
 	StudioEvent.CopyInstallCommands -> this
-	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
-	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
+	StudioEvent.NewTest -> guardingUnsavedTest(DiscardContinuation.NewTest)
+	StudioEvent.OpenTest -> guardingUnsavedTest(DiscardContinuation.OpenTest)
+	StudioEvent.RequestQuit -> guardingUnsavedTest(DiscardContinuation.Quit)
+	StudioEvent.RevealLogs, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
 	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = "Opened ${event.path}")
 	is StudioEvent.TestSaved -> copy(testPath = event.path, isTestDirty = false, notice = "Saved ${event.path}")
 	is StudioEvent.ChangeTestName -> copy(test = test.copy(name = event.value), isTestDirty = true)
@@ -590,7 +617,11 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	is StudioEvent.ChangeAppId -> copy(appId = event.value)
 	is StudioEvent.ChangeSchemeOrModule -> copy(schemeOrModule = event.value)
 	StudioEvent.RequestResetAppData -> copy(pendingApproval = PendingApproval("Erase app data?", "This removes all local data for $appId on the selected device. The action cannot be undone.", ApprovedAction.ResetAppData, confirmLabel = "Erase data"))
-	is StudioEvent.ResolveApproval -> copy(pendingApproval = null)
+	is StudioEvent.ResolveApproval -> {
+		val action = pendingApproval?.action
+		val resolved = copy(pendingApproval = null)
+		if (event.approved && action is ApprovedAction.DiscardTest) resolved.continuingAfterDiscard(action.then) else resolved
+	}
 	is StudioEvent.DeviceOperationFailed -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message)
 	is StudioEvent.DeviceOperationStarted -> copy(deviceOperation = DeviceOperation.Working(event.message), notice = null)
 	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message, lastBuildArtifact = event.artifact ?: lastBuildArtifact)

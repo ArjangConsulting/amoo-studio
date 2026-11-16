@@ -160,4 +160,26 @@ class StudioScreensUiTest {
 		assertTrue(onAllNodesWithText("Live view needs a newer Amoo.").fetchSemanticsNodes().isNotEmpty())
 		onNodeWithText("Pause").assertExists()
 	}
+
+	@Test
+	fun settingsRevealsTheLogFolder() = runComposeUiTest {
+		val events = CallRecorder<StudioEvent>()
+		setContent { Host { SettingsContent(StudioState(providerApiKeysLoaded = true)) { events.record(it) } } }
+
+		onNodeWithText("Reveal logs").performClick()
+
+		assertTrue(StudioEvent.RevealLogs in events.values())
+	}
+
+	@Test
+	fun discardingUnsavedChangesIsConfirmedThroughTheApprovalDialog() = runComposeUiTest {
+		val events = CallRecorder<StudioEvent>()
+		val state = StudioState(isTestDirty = true).reduce(StudioEvent.NewTest)
+		setContent { Host { AmooStudioApp(state) { events.record(it) } } }
+
+		onNodeWithText("Discard unsaved changes?").assertExists()
+		onNodeWithText("Discard changes").performClick()
+
+		assertTrue(StudioEvent.ResolveApproval(true) in events.values())
+	}
 }

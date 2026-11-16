@@ -50,6 +50,9 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 				SecondaryButton("Check again", { onEvent(StudioEvent.RefreshMcpStatus) }, enabled = state.connection.supports("mcp.status") && state.mcpStatus !is McpStatus.Checking)
 			}
 		}
+		SectionCard("Diagnostics", Modifier.fillMaxWidth(), description = "Studio keeps a rotating log of its own activity and Amoo's connection. Attach it to bug reports; it never contains API keys or chat text.") {
+			SecondaryButton("Reveal logs", { onEvent(StudioEvent.RevealLogs) })
+		}
 		SectionHeader("AI providers", titleStyle = MaterialTheme.typography.titleLarge)
 		if (!state.providerApiKeysLoaded) InlineProgressIndicator("Reading stored API keys…")
 		state.providerApiKeyDeletionFailures.forEach { (id, message) -> key("delete-$id") {

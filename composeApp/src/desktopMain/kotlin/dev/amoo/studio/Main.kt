@@ -5,6 +5,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.painterResource
@@ -38,12 +39,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import java.awt.Dimension
 import java.awt.FileDialog
 import java.awt.Desktop
 import java.awt.Frame
@@ -54,6 +58,7 @@ import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.prefs.Preferences
+import kotlin.math.roundToInt
 import kotlin.concurrent.thread
 import javax.imageio.ImageIO
 import javax.swing.JFileChooser
@@ -131,19 +136,17 @@ private fun ProviderProfile.toRequest(connection: ConnectionState) = ProviderReq
 private class StudioController(
 	private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
 ) : AutoCloseable {
+	private val log = StudioLog.forFeature("Studio")
 	private val preferences = Preferences.userNodeForPackage(StudioController::class.java)
+	private val studioPreferences = StudioPreferences(preferences)
 	private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
 	private val testFileStore = AmooTestFileStore(json)
 	private val providerStore = ProviderStore(preferences, createProviderKeychain(), json)
+	private val chatHistory = ChatHistoryStore(File(studioDataDirectory(detectHostPlatform()), ChatHistoryStore.FILE_NAME), json, preferences)
 	// Keychain access can block or prompt; a single worker also keeps writes and deletes in order.
 	private val keychainDispatcher = Dispatchers.IO.limitedParallelism(1)
-	val state = MutableStateFlow(StudioState(
-		hostPlatform = detectHostPlatform(),
-		themeMode = loadThemeMode(),
-		providers = providerStore.loadProfiles(),
-		chat = ChatState(messages = loadChatMessages()),
-		workbenchSplit = preferences.getFloat(WORKBENCH_SPLIT_KEY, DEFAULT_WORKBENCH_SPLIT),
-	))
+	val initialWindowSize: WindowSize? = studioPreferences.windowSize()
+	val state = MutableStateFlow(initialState())
 	val screenshotLoader: ScreenshotLoader = DesktopScreenshotLoader()
 
 	/**
@@ -161,14 +164,50 @@ private class StudioController(
 			askAmoo<ValidationResult>(REPL_VALIDATE_CAPABILITY, "repl.validate") { put("line", line) }?.diagnostics
 	}
 
+	private fun initialState(): StudioState {
+		val providers = providerStore.loadProfiles()
+		val session = runCatching(studioPreferences::loadSession).getOrDefault(PersistedSession())
+		return StudioState(
+			hostPlatform = detectHostPlatform(),
+			themeMode = runCatching(studioPreferences::themeMode).getOrDefault(ThemeMode.System),
+			providers = providers,
+			chat = ChatState(messages = runCatching(chatHistory::load).getOrDefault(emptyList())),
+			projectPath = session.projectPath,
+			appId = session.appId,
+			schemeOrModule = session.schemeOrModule,
+			selectedProviderId = session.selectedProviderId?.takeIf { id -> providers.any { it.id == id } },
+			selectedDeviceId = session.selectedDeviceId,
+			workbenchSplit = session.workbenchSplit,
+		)
+	}
+
 	@Serializable private data class ValidationResult(val diagnostics: List<ReplDiagnostic>)
+
+	/** Every RPC goes through here so each call and failure is logged with its method and identifiers, never its payload. */
+	private suspend fun call(method: String, params: JsonElement = JsonObject(emptyMap()), timeoutMs: Long? = null, context: String = ""): JsonElement {
+		val quiet = method in QUIET_METHODS
+		val started = System.nanoTime()
+		if (!quiet) log.info("rpc.call", "method=$method $context")
+		return try {
+			client.call(method, params, timeoutMs).also {
+				val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+				if (quiet) log.debug("rpc.ok", "method=$method ms=$elapsed $context") else log.info("rpc.ok", "method=$method ms=$elapsed $context")
+			}
+		} catch (cancelled: CancellationException) {
+			log.debug("rpc.cancelled", "method=$method $context")
+			throw cancelled
+		} catch (failure: Exception) {
+			log.error("rpc.failed", failure, "method=$method ms=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} $context")
+			throw failure
+		}
+	}
 
 	private fun selectedDevice(): StudioDevice? = state.value.let { snapshot -> snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId } }
 
 	private suspend inline fun <reified T> askAmoo(capability: String, method: String, crossinline params: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): T? {
 		if (!state.value.connection.supports(capability)) return null
 		return try {
-			json.decodeFromJsonElement<T>(client.call(method, buildJsonObject { params() }))
+			json.decodeFromJsonElement<T>(call(method, buildJsonObject { params() }))
 		} catch (cancelled: kotlinx.coroutines.CancellationException) {
 			throw cancelled
 		} catch (failure: Exception) {
@@ -194,9 +233,10 @@ private class StudioController(
 		scope.launch(start = CoroutineStart.UNDISPATCHED) { client.notifications.collect(::onNotification) }
 		client.start()
 		scope.launch { state.map { it.desiredMirrorDevice() }.distinctUntilChanged().collect(mirror::update) }
-		persistWorkbenchSplit()
+		persistSession()
 		scope.launch {
 			client.state.collect { processState ->
+				log.info("process.state", processState::class.simpleName.orEmpty())
 				when (processState) {
 					is ProcessRpcState.Ready -> handshake()
 					is ProcessRpcState.Unavailable -> state.value = state.value.reduce(StudioEvent.ConsoleRecordingInterrupted).reduce(StudioEvent.ConnectionChanged(
@@ -210,7 +250,7 @@ private class StudioController(
 
 	private fun onNotification(notification: RpcNotification) {
 		val decoded = runCatching { json.decodeAmooNotification(notification) }.getOrElse { error ->
-			System.err.println("Ignoring malformed ${notification.method} notification: ${error.message}")
+			log.error("notification.malformed", error, "method=${notification.method}")
 			return
 		}
 		when (decoded) {
@@ -222,10 +262,12 @@ private class StudioController(
 
 	private suspend fun handshake() {
 		try {
-			val handshake = json.decodeFromJsonElement<Handshake>(client.call("system.handshake"))
+			val handshake = json.decodeFromJsonElement<Handshake>(call("system.handshake"))
+			log.info("handshake.ok", "amoo=${handshake.version} protocol=${handshake.protocolVersion} capabilities=${handshake.capabilities.size}")
 			state.value = state.value.reduce(StudioEvent.ConnectionChanged(connectionFromHandshake(handshake.version, handshake.protocolVersion, handshake.capabilities)))
 			loadToolCatalog()
 		} catch (error: Exception) {
+			log.error("handshake.failed", error)
 			state.value = state.value.reduce(StudioEvent.ConnectionChanged(ConnectionState.Unavailable(error.message ?: "Handshake failed")))
 		}
 	}
@@ -233,7 +275,7 @@ private class StudioController(
 	/** Replaces the legacy console vocabulary with Amoo's catalog; older builds keep [ToolCatalog.Legacy]. */
 	private suspend fun loadToolCatalog() {
 		if (!state.value.connection.supports(TOOLS_CATALOG_CAPABILITY)) return
-		runCatching { json.decodeFromJsonElement<ToolCatalog>(client.call("tools.catalog")) }
+		runCatching { json.decodeFromJsonElement<ToolCatalog>(call("tools.catalog")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.ToolCatalogLoaded(it)) }
 			.onFailure { state.value = state.value.copy(notice = "Could not load Amoo's tool catalog; the console uses its basic commands: ${it.message}") }
 	}
@@ -242,6 +284,7 @@ private class StudioController(
 		val approvedAction = state.value.pendingApproval?.action
 		val createDeviceRequest = state.value.createDevice
 		val activeRunId = (state.value.testExecution as? TestExecution.Running)?.runId
+		val testDirty = state.value.isTestDirty
 		val providerToSave = when (event) {
 			is StudioEvent.SaveProvider -> event.profile
 			is StudioEvent.RetryProviderApiKeySave -> state.value.providers.firstOrNull { it.id == event.id }
@@ -263,7 +306,8 @@ private class StudioController(
 			StudioEvent.CancelTestRun -> cancelTestRun(activeRunId)
 			StudioEvent.ExportTest -> exportTest()
 			StudioEvent.RetryConnection -> { client.close(); client.start() }
-			StudioEvent.OpenTest -> openTest()
+			StudioEvent.OpenTest -> if (!testDirty) openTest()
+			StudioEvent.RevealLogs -> revealLogs()
 			StudioEvent.SaveTest -> saveTest(forcePicker = state.value.testPath == null)
 			StudioEvent.SaveTestAs -> saveTest(forcePicker = true)
 			StudioEvent.CopyMcpConfiguration -> copyMcpConfiguration()
@@ -292,6 +336,7 @@ private class StudioController(
 			is StudioEvent.ResolveApproval -> when (approvedAction) {
 				ApprovedAction.ResetAppData -> if (event.approved) resetAppData()
 				ApprovedAction.InstallAmoo -> if (event.approved) installAmoo()
+				is ApprovedAction.DiscardTest -> if (event.approved && approvedAction.then == DiscardContinuation.OpenTest) openTest()
 				// A decline is an answer too: the agent is told and continues another way.
 				is ApprovedAction.AgentTool -> answerAgentApproval(approvedAction, event.approved)
 				null -> Unit
@@ -306,7 +351,7 @@ private class StudioController(
 
 	private fun refreshDevices() = scope.launch {
 		if (!requireCapability("devices.list")) return@launch
-		runCatching { json.decodeFromJsonElement<DeviceListResult>(client.call("devices.list")) }
+		runCatching { json.decodeFromJsonElement<DeviceListResult>(call("devices.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.DevicesLoaded(it.devices)) }
 			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Device discovery failed: ${it.message}") }
 	}
@@ -316,7 +361,7 @@ private class StudioController(
 			state.value = state.value.reduce(StudioEvent.ReportsFailed("The connected Amoo version does not support reports.list"))
 			return@launch
 		}
-		runCatching { json.decodeFromJsonElement<ReportListResult>(client.call("reports.list")) }
+		runCatching { json.decodeFromJsonElement<ReportListResult>(call("reports.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.ReportsLoaded(it.reports)) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.ReportsFailed("Report loading failed: ${it.message}")) }
 	}
@@ -380,7 +425,7 @@ private class StudioController(
 		if (!requireCapability(method)) return
 		state.value = state.value.reduce(StudioEvent.DeviceOperationStarted(message))
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<OperationResult>(client.call(method, params)) }
+			runCatching { json.decodeFromJsonElement<OperationResult>(call(method, params, context = (params["deviceId"] ?: params["id"])?.let { "deviceId=${it.jsonPrimitive.content}" }.orEmpty())) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.DeviceOperationFinished(result.message, result.artifactPath)); if (refreshAfter) refreshDevices() }
 				.onFailure { state.value = state.value.reduce(StudioEvent.DeviceOperationFailed("Operation failed: ${it.message}")) }
 		}
@@ -478,7 +523,7 @@ private class StudioController(
 			return@launch
 		}
 		state.value = state.value.reduce(StudioEvent.RefreshMcpStatus)
-		runCatching { json.decodeFromJsonElement<McpStatusResult>(client.call("mcp.status")) }
+		runCatching { json.decodeFromJsonElement<McpStatusResult>(call("mcp.status")) }
 			.onSuccess { result ->
 				state.value = if (result.available) state.value.reduce(StudioEvent.McpStatusLoaded(result.transport, result.arguments))
 				else state.value.reduce(StudioEvent.McpStatusFailed("Amoo MCP is unavailable"))
@@ -513,7 +558,7 @@ private class StudioController(
 		persistChatMessages()
 		val request = ChatRequest(provider.toRequest(snapshot.connection), snapshot.chat.messages + userMessage, snapshot.test)
 		chatJob = scope.launch {
-			runCatching { json.decodeFromJsonElement<ChatResult>(client.call("chat.send", json.encodeToJsonElement(request))) }
+			runCatching { json.decodeFromJsonElement<ChatResult>(call("chat.send", json.encodeToJsonElement(request))) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.ChatResponseReceived(ChatMessage("assistant-${System.nanoTime()}", ChatRole.Assistant, result.message), result.proposedPlan)); persistChatMessages() }
 				.onFailure { error ->
 					if (state.value.chat.operation == ChatOperation.Sending) state.value = state.value.reduce(StudioEvent.ChatRequestFailed("AI request failed: ${error.message}"))
@@ -552,7 +597,7 @@ private class StudioController(
 			buildPath = snapshot.lastBuildArtifact,
 		)
 		chatJob = scope.launch {
-			runCatching { json.decodeFromJsonElement<AgentStartResult>(client.call("agent.start", json.encodeToJsonElement(request))) }
+			runCatching { json.decodeFromJsonElement<AgentStartResult>(call("agent.start", json.encodeToJsonElement(request))) }
 				.onSuccess { started ->
 					state.value = state.value.reduce(StudioEvent.AgentRunStarted(started.runId, userMessage))
 					persistChatMessages()
@@ -593,7 +638,7 @@ private class StudioController(
 
 	private suspend fun replayAgentEvents(runId: String) {
 		val after = (state.value.agentRun?.takeIf { it.runId == runId }?.nextSeq ?: return) - 1
-		runCatching { json.decodeFromJsonElement<AgentEventsResult>(client.call("agent.events", buildJsonObject { put("runId", runId); put("after", after) })) }
+		runCatching { json.decodeFromJsonElement<AgentEventsResult>(call("agent.events", buildJsonObject { put("runId", runId); put("after", after) }, context = "runId=$runId")) }
 			.onSuccess { result ->
 				lastAgentEventNanos = System.nanoTime()
 				val wasTerminal = state.value.agentRun?.status?.isTerminal == true
@@ -603,14 +648,14 @@ private class StudioController(
 	}
 
 	private fun answerAgentApproval(action: ApprovedAction.AgentTool, approved: Boolean) = scope.launch {
-		runCatching { client.call("agent.approve", buildJsonObject { put("runId", action.runId); put("callId", action.callId); put("approved", approved) }) }
+		runCatching { call("agent.approve", buildJsonObject { put("runId", action.runId); put("callId", action.callId); put("approved", approved) }, context = "runId=${action.runId}") }
 			.onFailure { state.value = state.value.copy(notice = "Could not answer the approval: ${it.message}") }
 	}
 
 	private fun cancelAgentRun() {
 		val runId = state.value.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
 		scope.launch {
-			runCatching { client.call("agent.cancel", buildJsonObject { put("runId", runId) }) }
+			runCatching { call("agent.cancel", buildJsonObject { put("runId", runId) }, context = "runId=$runId") }
 				.onFailure { state.value = state.value.copy(notice = "Could not stop the agent: ${it.message}") }
 		}
 	}
@@ -621,7 +666,7 @@ private class StudioController(
 		val text = snapshot.chat.input.trim().takeIf(String::isNotEmpty) ?: return
 		val message = ChatMessage("user-${System.nanoTime()}", ChatRole.User, text)
 		scope.launch {
-			runCatching { client.call("agent.continue", buildJsonObject { put("runId", runId); put("message", text) }) }
+			runCatching { call("agent.continue", buildJsonObject { put("runId", runId); put("message", text) }, context = "runId=$runId") }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.AgentSteered(message)); persistChatMessages() }
 				.onFailure { state.value = state.value.copy(notice = "Could not send guidance: ${it.message}") }
 		}
@@ -648,7 +693,7 @@ private class StudioController(
 		)
 		generateJob?.cancel()
 		generateJob = scope.launch {
-			runCatching { json.decodeFromJsonElement<GenerateResult>(client.call("tests.generate", json.encodeToJsonElement(request))) }
+			runCatching { json.decodeFromJsonElement<GenerateResult>(call("tests.generate", json.encodeToJsonElement(request))) }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.TestGenerated(it.generated, it.problem, it.test)) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.TestGenerationFailed("Test generation failed: ${it.message}")) }
 		}
@@ -657,7 +702,7 @@ private class StudioController(
 	private fun saveGeneratedTest() {
 		val generated = state.value.generatedTest?.generated ?: return
 		val file = chooseFile(FileDialog.SAVE, "Save generated test", generated.fileName) ?: return
-		runCatching { file.writeText(generated.source) }
+		runCatching { writeAtomically(file, generated.source) }
 			.onSuccess { state.value = state.value.copy(notice = "Saved ${file.name}") }
 			.onFailure { state.value = state.value.copy(notice = "Could not write file: ${it.message}") }
 	}
@@ -676,7 +721,7 @@ private class StudioController(
 			return
 		}
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<ProviderCheckResult>(client.call("providers.check", json.encodeToJsonElement(provider.toRequest(snapshot.connection)))) }
+			runCatching { json.decodeFromJsonElement<ProviderCheckResult>(call("providers.check", json.encodeToJsonElement(provider.toRequest(snapshot.connection)), context = "providerId=$id")) }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.ProviderCheckFinished(id, it.message)) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.ProviderCheckFailed(id, "Connection failed: ${it.message}")) }
 		}
@@ -696,7 +741,7 @@ private class StudioController(
 		val platform = snapshot.devices.firstOrNull { it.id == snapshot.selectedDeviceId }?.platform?.name?.lowercase()
 		val request = ReplRequest(command, snapshot.test, snapshot.selectedDeviceId, snapshot.selectedProviderId, platform)
 		consoleJob = scope.launch {
-			val entry = runCatching { json.decodeFromJsonElement<ReplResult>(client.call("repl.execute", json.encodeToJsonElement(request))) }
+			val entry = runCatching { json.decodeFromJsonElement<ReplResult>(call("repl.execute", json.encodeToJsonElement(request))) }
 				.fold(
 					onSuccess = {
 						ConsoleEntry(
@@ -719,7 +764,7 @@ private class StudioController(
 		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Starting } ?: return
 		val request = ReplRecordingStartRequest(recording.device.id, recording.device.platform.name.lowercase(), recording.appId, state.value.lastBuildArtifact)
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.startRecording", json.encodeToJsonElement(request), timeoutMs = RECORDING_START_TIMEOUT_MILLIS)) }
+			runCatching { json.decodeFromJsonElement<ReplRecording>(call("repl.startRecording", json.encodeToJsonElement(request), timeoutMs = RECORDING_START_TIMEOUT_MILLIS, context = "deviceId=${recording.device.id}")) }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStarted(it.sessionId, it.actionCount)) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not start recording: ${it.message}")) }
 		}
@@ -728,7 +773,7 @@ private class StudioController(
 	private fun stopConsoleRecording() {
 		val recording = state.value.console.recording?.takeIf { it.status == ConsoleRecordingStatus.Stopping } ?: return
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<ReplRecording>(client.call("repl.stopRecording", json.encodeToJsonElement(ReplRecordingStopRequest(recording.device.id)), timeoutMs = RECORDING_STOP_TIMEOUT_MILLIS)) }
+			runCatching { json.decodeFromJsonElement<ReplRecording>(call("repl.stopRecording", json.encodeToJsonElement(ReplRecordingStopRequest(recording.device.id)), timeoutMs = RECORDING_STOP_TIMEOUT_MILLIS, context = "deviceId=${recording.device.id}")) }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.ConsoleRecordingStopped(it.actionCount, it.planPath, it.message)) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.ConsoleRecordingFailed("Could not stop recording: ${it.message}")) }
 		}
@@ -749,7 +794,7 @@ private class StudioController(
 				runAsyncTest(request)
 				return@launch
 			}
-			runCatching { json.decodeFromJsonElement<TestRunResult>(client.call("tests.run", json.encodeToJsonElement(request))) }
+			runCatching { json.decodeFromJsonElement<TestRunResult>(call("tests.run", json.encodeToJsonElement(request))) }
 				.onSuccess { result -> state.value = state.value.reduce(StudioEvent.TestRunFinished(result.message, result.sessionId, result.reportId)) }
 				.onFailure { error -> if (state.value.testExecution is TestExecution.Running) state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${error.message}")) }
 			testRunJob = null
@@ -757,7 +802,7 @@ private class StudioController(
 	}
 
 	private suspend fun runAsyncTest(request: TestRunRequest) {
-		runCatching { json.decodeFromJsonElement<TestStartResult>(client.call("tests.start", json.encodeToJsonElement(request))) }
+		runCatching { json.decodeFromJsonElement<TestStartResult>(call("tests.start", json.encodeToJsonElement(request))) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestRunFailed("Test run failed: ${it.message}")); testRunJob = null }
 			.onSuccess { started ->
 				val pushed = state.value.connection.supports(TESTS_PROGRESS_CAPABILITY)
@@ -801,12 +846,12 @@ private class StudioController(
 		} else if (previous != null) {
 			delay(pollDelayMillis)
 		}
-		return json.decodeFromJsonElement<TestRunStatus>(client.call("tests.status", buildJsonObject { put("runId", runId) }))
+		return json.decodeFromJsonElement<TestRunStatus>(call("tests.status", buildJsonObject { put("runId", runId) }, context = "runId=$runId"))
 	}
 
 	private fun cancelTestRun(runId: String?) {
 		if (runId != null && state.value.connection.supports("tests.cancel")) {
-			scope.launch { runCatching { client.call("tests.cancel", buildJsonObject { put("runId", runId) }) } }
+			scope.launch { runCatching { call("tests.cancel", buildJsonObject { put("runId", runId) }, context = "runId=$runId") } }
 		}
 		testRunJob?.cancel()
 		testRunJob = null
@@ -822,7 +867,7 @@ private class StudioController(
 		}
 		state.value = state.value.reduce(StudioEvent.TestExportStarted)
 		scope.launch {
-			runCatching { json.decodeFromJsonElement<TestExportResult>(client.call("tests.export", json.encodeToJsonElement(TestExportRequest(snapshot.test)))) }
+			runCatching { json.decodeFromJsonElement<TestExportResult>(call("tests.export", json.encodeToJsonElement(TestExportRequest(snapshot.test)))) }
 				.onSuccess { result -> saveExportedTest(result) }
 				.onFailure { state.value = state.value.reduce(StudioEvent.TestExportFailed("Test export failed: ${it.message}")) }
 		}
@@ -834,7 +879,7 @@ private class StudioController(
 			state.value = state.value.reduce(StudioEvent.TestExportFinished("Export cancelled"))
 			return
 		}
-		runCatching { file.writeText(result.source) }
+		runCatching { writeAtomically(file, result.source) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.TestExportFinished("Exported ${file.name}")) }
 			.onFailure { state.value = state.value.reduce(StudioEvent.TestExportFailed("Could not write file: ${it.message}")) }
 	}
@@ -849,22 +894,29 @@ private class StudioController(
 		}
 	}
 
-	private fun loadChatMessages(): List<ChatMessage> = runCatching {
-		preferences.get("chatMessages", null)?.let { json.decodeFromString<List<ChatMessage>>(it) }
-	}.getOrNull().orEmpty()
-
 	private fun persistChatMessages() {
-		runCatching { preferences.put("chatMessages", json.encodeToString(state.value.chat.messages.takeLast(100))) }
-			.onFailure { state.value = state.value.copy(notice = "Could not save conversation: ${it.message}") }
+		runCatching { chatHistory.save(state.value.chat.messages) }
+			.onFailure {
+				log.error("chat.persist", it)
+				state.value = state.value.copy(notice = "Could not save conversation: ${it.message}")
+			}
 	}
 
-	private fun loadThemeMode(): ThemeMode = preferences.get("themeMode", null)
-		?.let { stored -> ThemeMode.entries.firstOrNull { it.name == stored } }
-		?: ThemeMode.System
-
 	private fun persistThemeMode(themeMode: ThemeMode) {
-		runCatching { preferences.put("themeMode", themeMode.name) }
+		runCatching { studioPreferences.saveThemeMode(themeMode) }
 			.onFailure { state.value = state.value.copy(notice = "Could not save appearance: ${it.message}") }
+	}
+
+	private fun revealLogs() {
+		val directory = StudioLog.directory
+		if (directory == null || !directory.isDirectory) {
+			state.value = state.value.copy(notice = "Studio has no log folder on this machine")
+			return
+		}
+		runCatching {
+			require(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) { "Opening folders is unsupported on this desktop" }
+			Desktop.getDesktop().open(directory)
+		}.onFailure { state.value = state.value.copy(notice = "Could not open the log folder: ${it.message}") }
 	}
 
 	private fun saveProvider(profile: ProviderProfile) {
@@ -912,17 +964,24 @@ private class StudioController(
 
 	private fun safeFileName(value: String) = value.trim().replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "untitled-test" }
 
-	// Dragging the divider emits many fractions; persist once it settles.
+	/** Remembers the working context across launches. Dragging the divider emits many fractions, so writes wait for the state to settle. */
 	@OptIn(FlowPreview::class)
-	private fun persistWorkbenchSplit() = scope.launch {
-		state.map { it.workbenchSplit }.distinctUntilChanged().drop(1).debounce(500).collect { preferences.putFloat(WORKBENCH_SPLIT_KEY, it) }
+	private fun persistSession() = scope.launch {
+		state.map { PersistedSession(it.projectPath, it.appId, it.schemeOrModule, it.selectedProviderId, it.selectedDeviceId, it.workbenchSplit) }
+			.distinctUntilChanged().drop(1).debounce(500)
+			.collect { session -> runCatching { studioPreferences.saveSession(session) }.onFailure { log.error("session.persist", it) } }
+	}
+
+	fun persistWindowSize(size: WindowSize) {
+		runCatching { studioPreferences.saveWindowSize(size) }.onFailure { log.error("window.persist", it) }
 	}
 
 	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); agentWatchJob?.cancel(); generateJob?.cancel(); mirror.close(); client.close() }
 }
 
 private const val PUSHED_PROGRESS_HEARTBEAT_MILLIS = 5_000L
-private const val WORKBENCH_SPLIT_KEY = "workbenchSplit"
+// Polled or per-keystroke calls: logged only at debug level so they don't bury the log.
+private val QUIET_METHODS = setOf("tests.status", "agent.events", "repl.complete", "repl.validate")
 private const val AGENT_HEARTBEAT_MILLIS = 5_000L
 // Starting a recording can boot the device and build the companion; stopping writes the plan.
 private const val RECORDING_START_TIMEOUT_MILLIS = 15 * 60_000L
@@ -995,25 +1054,45 @@ private fun installDockIcon() {
 	}
 }
 
-fun main() = application {
-	val controller = remember { StudioController() }
-	DisposableEffect(controller) {
-		onDispose(controller::close)
-	}
-	val state by controller.state.collectAsState()
-	Window(
-		onCloseRequest = {
-			exitApplication()
-		},
-		title = "Amoo Studio",
-		icon = painterResource(Res.drawable.icon_512),
-		state = rememberWindowState(width = 960.dp, height = 680.dp),
-	) {
-		LaunchedEffect(Unit) {
-			installDockIcon()
+@OptIn(FlowPreview::class)
+fun main() {
+	StudioLog.install(File(studioDataDirectory(detectHostPlatform()), "logs"))
+	StudioLog.forFeature("Studio").info("launch", "os=${System.getProperty("os.name")} arch=${System.getProperty("os.arch")}")
+	application {
+		val controller = remember { StudioController() }
+		DisposableEffect(controller) {
+			onDispose(controller::close)
 		}
-		CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader, LocalReplAssist provides controller.replAssist) {
-			AmooStudioApp(state, controller::onEvent)
+		val state by controller.state.collectAsState()
+		val windowState = rememberWindowState(
+			width = (controller.initialWindowSize?.width ?: DEFAULT_WINDOW_WIDTH).dp,
+			height = (controller.initialWindowSize?.height ?: DEFAULT_WINDOW_HEIGHT).dp,
+		)
+		LaunchedEffect(state.exitRequested) {
+			if (state.exitRequested) exitApplication()
+		}
+		LaunchedEffect(windowState) {
+			snapshotFlow { windowState.size }
+				.drop(1)
+				.debounce(500)
+				.collect { size -> controller.persistWindowSize(WindowSize(size.width.value.roundToInt(), size.height.value.roundToInt())) }
+		}
+		Window(
+			onCloseRequest = { controller.onEvent(StudioEvent.RequestQuit) },
+			title = "Amoo Studio",
+			icon = painterResource(Res.drawable.icon_512),
+			state = windowState,
+		) {
+			LaunchedEffect(Unit) {
+				installDockIcon()
+				window.minimumSize = Dimension(StudioPreferences.MIN_WINDOW_WIDTH, StudioPreferences.MIN_WINDOW_HEIGHT)
+			}
+			CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader, LocalReplAssist provides controller.replAssist) {
+				AmooStudioApp(state, controller::onEvent)
+			}
 		}
 	}
 }
+
+private const val DEFAULT_WINDOW_WIDTH = 960
+private const val DEFAULT_WINDOW_HEIGHT = 680

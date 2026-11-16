@@ -117,13 +117,7 @@ internal class AmooRuntimeInstaller(
 		private const val STAGING_PREFIX = ".staging-"
 		private const val EXTRACT_TIMEOUT_MINUTES = 10L
 
-		/** Where packaged Studio keeps extracted runtimes: Application Support on macOS, XDG data on Linux. */
-		fun defaultRuntimeRoot(hostPlatform: HostPlatform): File {
-			val home = File(System.getProperty("user.home"))
-			return when (hostPlatform) {
-				HostPlatform.MacOS -> File(home, "Library/Application Support/Amoo Studio/runtime")
-				else -> File(System.getenv("XDG_DATA_HOME")?.takeIf(String::isNotBlank) ?: File(home, ".local/share").path, "amoo-studio/runtime")
-			}
-		}
+		/** Where packaged Studio keeps extracted runtimes, inside [studioDataDirectory]. */
+		fun defaultRuntimeRoot(hostPlatform: HostPlatform): File = File(studioDataDirectory(hostPlatform), "runtime")
 	}
 }

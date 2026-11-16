@@ -37,9 +37,9 @@ internal fun StudioState.reduceConsoleRecording(event: StudioEvent): StudioState
 	StudioEvent.StartConsoleRecording -> when (val readiness = sessionReadiness(REPL_RECORDING_CAPABILITY)) {
 		is SessionReadiness.Ready -> if (console.recording?.isActive == true) this
 			else copy(console = console.copy(recording = ConsoleRecording(ConsoleRecordingStatus.Starting, readiness.device, readiness.appId)), notice = null)
-		SessionReadiness.Unsupported -> copy(notice = "The connected Amoo version cannot record console commands. Update Amoo.")
-		SessionReadiness.NoDevice -> copy(notice = "Select a running device in Devices before recording")
-		is SessionReadiness.NoApp -> copy(notice = "Set the app's bundle or application ID in Devices so the recording can launch it on ${readiness.device.name}")
+		SessionReadiness.Unsupported -> copy(notice = Notice.error("The connected Amoo version cannot record console commands. Update Amoo."))
+		SessionReadiness.NoDevice -> copy(notice = Notice.error("Select a running device in Devices before recording"))
+		is SessionReadiness.NoApp -> copy(notice = Notice.error("Set the app's bundle or application ID in Devices so the recording can launch it on ${readiness.device.name}"))
 	}
 	is StudioEvent.ConsoleRecordingStarted -> console.recording?.takeIf { it.status == ConsoleRecordingStatus.Starting }?.let { recording ->
 		copy(console = console.copy(recording = recording.copy(status = ConsoleRecordingStatus.Recording, sessionId = event.sessionId, actionCount = event.actionCount)))
@@ -62,7 +62,7 @@ internal fun StudioState.reduceConsoleRecording(event: StudioEvent): StudioState
 			ConsoleRecordingStatus.Starting, null -> null
 			else -> recording
 		}
-		copy(console = console.copy(recording = next), notice = event.message)
+		copy(console = console.copy(recording = next), notice = Notice.error(event.message))
 	}
 	StudioEvent.ConsoleRecordingInterrupted -> {
 		val recording = console.recording

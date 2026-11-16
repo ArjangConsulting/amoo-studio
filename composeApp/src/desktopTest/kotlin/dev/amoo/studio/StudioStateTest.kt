@@ -37,6 +37,7 @@ class StudioStateTest {
 		assertEquals(ApprovedAction.InstallAmoo, approval.action)
 		assertEquals("Install", approval.confirmLabel)
 		assertTrue(approval.message.contains(AMOO_HOMEBREW_TAP_COMMAND))
+		assertTrue(approval.message.contains(AMOO_HOMEBREW_TRUST_COMMAND))
 		assertTrue(approval.message.contains(AMOO_HOMEBREW_INSTALL_COMMAND))
 	}
 
@@ -56,7 +57,7 @@ class StudioStateTest {
 		val updated = state.reduce(StudioEvent.InstallAmooFinished("Amoo installed"))
 
 		assertEquals(AmooInstallState.Idle, updated.amooInstall)
-		assertEquals("Amoo installed", updated.notice)
+		assertEquals("Amoo installed", updated.noticeMessage)
 	}
 
 	@Test
@@ -378,7 +379,7 @@ class StudioStateTest {
 		assertEquals(TestExecution.Idle, updated.testExecution)
 		assertEquals("session-1", updated.lastSessionId)
 		assertEquals("report-1", updated.lastReportId)
-		assertEquals("Passed", updated.notice)
+		assertEquals("Passed", updated.noticeMessage)
 	}
 
 	@Test
@@ -398,7 +399,7 @@ class StudioStateTest {
 		val finished = started.reduce(StudioEvent.TestExportFinished("Exported SignInFlowTest.swift"))
 
 		assertEquals(false, finished.testExportInProgress)
-		assertEquals("Exported SignInFlowTest.swift", finished.notice)
+		assertEquals("Exported SignInFlowTest.swift", finished.noticeMessage)
 	}
 
 	@Test
@@ -408,7 +409,7 @@ class StudioStateTest {
 		val failed = started.reduce(StudioEvent.TestExportFailed("Test export failed: connection lost"))
 
 		assertEquals(false, failed.testExportInProgress)
-		assertEquals("Test export failed: connection lost", failed.notice)
+		assertEquals("Test export failed: connection lost", failed.noticeMessage)
 	}
 
 	@Test
@@ -567,4 +568,124 @@ class StudioStateTest {
 		assertEquals(setOf("a"), duplicate.providerApiKeysSaving)
 	}
 
+
+	private val dirty = StudioState(test = AmooTest(name = "Checkout"), testPath = "/tmp/checkout.amootest", isTestDirty = true)
+
+	@Test
+	fun `new test on a dirty test asks before discarding`() {
+		val asked = dirty.reduce(StudioEvent.NewTest)
+
+		assertEquals(dirty.test, asked.test)
+		assertEquals(ApprovedAction.DiscardTest(DiscardContinuation.NewTest), asked.pendingApproval?.action)
+		assertEquals("Discard changes", asked.pendingApproval?.confirmLabel)
+		assertTrue(asked.pendingApproval!!.message.contains("Checkout"))
+	}
+
+	@Test
+	fun `confirming the discard starts the new test and declining keeps the edits`() {
+		val asked = dirty.reduce(StudioEvent.NewTest)
+
+		val confirmed = asked.reduce(StudioEvent.ResolveApproval(true))
+		assertEquals(null, confirmed.pendingApproval)
+		assertEquals(AmooTest().name, confirmed.test.name)
+		assertEquals(null, confirmed.testPath)
+		assertEquals(false, confirmed.isTestDirty)
+
+		val declined = asked.reduce(StudioEvent.ResolveApproval(false))
+		assertEquals(null, declined.pendingApproval)
+		assertEquals("Checkout", declined.test.name)
+		assertTrue(declined.isTestDirty)
+	}
+
+	@Test
+	fun `new test on a clean test replaces it without asking`() {
+		val updated = dirty.copy(isTestDirty = false).reduce(StudioEvent.NewTest)
+
+		assertEquals(null, updated.pendingApproval)
+		assertEquals(null, updated.testPath)
+	}
+
+	@Test
+	fun `open test on a dirty test asks and keeps the test until a file loads`() {
+		val asked = dirty.reduce(StudioEvent.OpenTest)
+
+		assertEquals(ApprovedAction.DiscardTest(DiscardContinuation.OpenTest), asked.pendingApproval?.action)
+		val confirmed = asked.reduce(StudioEvent.ResolveApproval(true))
+		assertEquals("Checkout", confirmed.test.name)
+		assertTrue(confirmed.isTestDirty)
+		assertEquals(null, dirty.copy(isTestDirty = false).reduce(StudioEvent.OpenTest).pendingApproval)
+	}
+
+	@Test
+	fun `quitting with unsaved changes asks first`() {
+		val asked = dirty.reduce(StudioEvent.RequestQuit)
+
+		assertEquals(false, asked.exitRequested)
+		assertEquals(ApprovedAction.DiscardTest(DiscardContinuation.Quit), asked.pendingApproval?.action)
+		assertEquals(false, asked.reduce(StudioEvent.ResolveApproval(false)).exitRequested)
+		assertEquals(true, asked.reduce(StudioEvent.ResolveApproval(true)).exitRequested)
+	}
+
+	@Test
+	fun `quitting a clean test exits immediately`() {
+		val updated = StudioState().reduce(StudioEvent.RequestQuit)
+
+		assertEquals(true, updated.exitRequested)
+		assertEquals(null, updated.pendingApproval)
+	}
+
+	@Test
+	fun `a failure is not replaced by a later success but is by another failure or a dismissal`() {
+		val failed = StudioState().reduce(StudioEvent.ShowNotice("Device discovery failed", NoticeTone.Error))
+
+		val afterSuccess = failed.reduce(StudioEvent.TestSaved("/tmp/a.amootest"))
+		assertEquals(Notice("Device discovery failed", NoticeTone.Error), afterSuccess.notice)
+		assertEquals(false, afterSuccess.isTestDirty)
+
+		assertEquals(Notice("Second failure", NoticeTone.Error), failed.reduce(StudioEvent.ShowNotice("Second failure", NoticeTone.Error)).notice)
+		assertEquals(null, failed.reduce(StudioEvent.ShowNotice(null)).notice)
+		assertEquals(null, failed.reduce(StudioEvent.TestRunStarted("Running")).notice)
+	}
+
+	@Test
+	fun `successes and information carry their tone`() {
+		assertEquals(NoticeTone.Success, StudioState().reduce(StudioEvent.TestSaved("/tmp/a.amootest")).notice?.tone)
+		assertEquals(NoticeTone.Info, StudioState().reduce(StudioEvent.CancelChat).notice?.tone)
+		assertEquals(NoticeTone.Error, StudioState().reduce(StudioEvent.TestRunFailed("boom")).notice?.tone)
+		assertEquals(NoticeTone.Success, StudioState().reduce(StudioEvent.ShowNotice("Copied", NoticeTone.Success)).notice?.tone)
+	}
+
+	@Test
+	fun `the about dialog opens and closes`() {
+		val opened = StudioState().reduce(StudioEvent.ShowAbout)
+
+		assertTrue(opened.aboutVisible)
+		assertEquals(false, opened.reduce(StudioEvent.DismissAbout).aboutVisible)
+	}
+
+	@Test
+	fun `the default Ollama profile leaves the model for the user to choose`() {
+		val ollama = defaultProviders().single()
+
+		assertEquals("", ollama.model)
+		assertTrue("Choose a model for Local Ollama" in ConnectionState.Starting.providerProblem(ollama).orEmpty())
+		assertEquals(null, ConnectionState.Starting.providerProblem(ollama.copy(model = "llama3")))
+	}
+
+	@Test
+	fun `the first-run checklist tracks connection, device, and provider`() {
+		val fresh = StudioState().firstRunChecklist()
+		assertEquals(listOf(false, false, false), fresh.map { it.done })
+		assertEquals(StudioEvent.SelectSection(StudioSection.Devices), fresh[1].action)
+
+		val device = StudioDevice("sim-1", "iPhone 17", TestPlatform.Ios, "26", DeviceStatus.Running)
+		val configured = StudioState(
+			connection = ConnectionState.Ready("1", STUDIO_PROTOCOL_VERSION, emptyList()),
+			devices = listOf(device),
+			selectedDeviceId = device.id,
+			providers = listOf(defaultProviders().single().copy(model = "llama3")),
+			selectedProviderId = "ollama",
+		).firstRunChecklist()
+		assertEquals(listOf(true, true, true), configured.map { it.done })
+	}
 }

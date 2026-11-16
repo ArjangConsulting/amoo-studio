@@ -25,6 +25,7 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 @Composable internal fun ReportsContent(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	val canList = state.connection.supports("reports.list")
 	val selected = state.reports.firstOrNull { it.id == state.selectedReportId }
+	val timestamps = LocalTimestampFormatter.current
 	Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
 		SectionHeader("Test reports", titleStyle = MaterialTheme.typography.titleLarge, actions = {
 			SecondaryButton("Refresh", { onEvent(StudioEvent.RefreshReports) }, enabled = canList && !state.reportsLoading)
@@ -38,7 +39,7 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 					SelectableCard(report.id == state.selectedReportId, { onEvent(StudioEvent.SelectReport(report.id)) }, Modifier.fillMaxWidth()) {
 						Text(report.testName, style = MaterialTheme.typography.titleMedium)
 						ReportStatusLabel(report.status)
-						Text("${report.startedAt}${report.deviceName.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+						Text("${timestamps.format(report.startedAt)}${report.deviceName.takeIf(String::isNotBlank)?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.bodySmall)
 					}
 				}
 			}
@@ -47,7 +48,8 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 				Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.small)) {
 					ReportStatusLabel(selected.status)
 					Text(selected.summary.ifBlank { "No summary was provided." })
-					selected.durationMillis?.let { KeyValueRow("Duration", "$it ms") }
+					KeyValueRow("Started", timestamps.format(selected.startedAt))
+					selected.durationMillis?.let { KeyValueRow("Duration", humanDuration(it)) }
 					KeyValueRow("Session report ID", selected.id)
 					if (selected.artifacts.isNotEmpty()) {
 						ThemeHorizontalDivider()

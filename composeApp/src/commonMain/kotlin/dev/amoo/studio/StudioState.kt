@@ -39,7 +39,7 @@ data class StudioState(
 	val console: ConsoleState = ConsoleState(),
 	/** Changes when Amoo runtime context can invalidate console suggestions for unchanged text. */
 	val runtimeContextRevision: Long = 0,
-	val notice: String? = null,
+	val notice: Notice? = null,
 	val devices: List<StudioDevice> = emptyList(),
 	val selectedDeviceId: String? = null,
 	val deviceOperation: DeviceOperation = DeviceOperation.Idle,
@@ -59,9 +59,25 @@ data class StudioState(
 	val generatedTest: GeneratedTestState? = null,
 	/** Fraction of the workbench width given to the console or agent feed; the device pane gets the rest. */
 	val workbenchSplit: Float = DEFAULT_WORKBENCH_SPLIT,
+	/** Set once the user has confirmed quitting (or there was nothing to lose); the desktop host then exits. */
+	val exitRequested: Boolean = false,
+	val aboutVisible: Boolean = false,
 )
 
 const val DEFAULT_WORKBENCH_SPLIT = 0.6f
+
+enum class NoticeTone { Info, Success, Error }
+
+/** A transient message under the section header. */
+data class Notice(val message: String, val tone: NoticeTone = NoticeTone.Info) {
+	companion object {
+		fun info(message: String) = Notice(message, NoticeTone.Info)
+		fun success(message: String) = Notice(message, NoticeTone.Success)
+		fun error(message: String) = Notice(message, NoticeTone.Error)
+	}
+}
+
+val StudioState.noticeMessage: String? get() = notice?.message
 
 sealed interface AmooInstallState {
 	data object Idle : AmooInstallState
@@ -172,6 +188,10 @@ value class Secret(val value: String) {
 const val PROVIDER_API_KEY_CAPABILITY = "providers.apiKey"
 
 /** Why [profile] can't authenticate against the connected Amoo, or null when it can. */
+/** Why [profile] cannot be used yet: a missing model first, then missing credentials. */
+fun ConnectionState.providerProblem(profile: ProviderProfile): String? =
+	if (profile.model.isBlank()) "Choose a model for ${profile.name} in Settings before using it" else providerCredentialProblem(profile)
+
 fun ConnectionState.providerCredentialProblem(profile: ProviderProfile): String? = when {
 	profile.kind == ProviderKind.Ollama -> null
 	!profile.apiKey.isBlank && supports(PROVIDER_API_KEY_CAPABILITY) -> null
@@ -250,11 +270,18 @@ sealed interface ApprovedAction {
 	data object InstallAmoo : ApprovedAction
 	/** An agent's destructive tool call waiting for the user. */
 	data class AgentTool(val runId: String, val callId: String) : ApprovedAction
+	/** Unsaved test changes that [then] would throw away. */
+	data class DiscardTest(val then: DiscardContinuation) : ApprovedAction
 }
+
+/** What happens to the open test once the user agrees to discard its unsaved changes. */
+enum class DiscardContinuation { NewTest, OpenTest, Quit }
 
 const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
 const val AMOO_HOMEBREW_FORMULA = "amoo"
 const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap $AMOO_HOMEBREW_TAP"
+/** Homebrew 7 refuses to load formulae from a tap until it is trusted; older Homebrew has no such command. */
+const val AMOO_HOMEBREW_TRUST_COMMAND = "brew trust $AMOO_HOMEBREW_TAP"
 const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install $AMOO_HOMEBREW_FORMULA"
 
 /** An unread existing key must not be interpreted as an empty key and deleted by a form save. */
@@ -263,7 +290,8 @@ fun StudioState.canSaveProvider(profile: ProviderProfile): Boolean =
 
 fun newProviderDraft() = ProviderProfile("", "", ProviderKind.OpenAI, ProviderKind.OpenAI.defaultBaseUrl, "", ProviderKind.OpenAI.defaultApiKeyEnvironmentVariable)
 
-fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "qwen3.8:27b-mlx"))
+/** Ollama's model depends on what the user has pulled, so the default profile leaves it blank until they choose one. */
+fun defaultProviders() = listOf(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", ""))
 
 sealed interface StudioEvent {
 	data class SelectSection(val section: StudioSection) : StudioEvent
@@ -277,6 +305,10 @@ sealed interface StudioEvent {
 	data object CopyInstallCommands : StudioEvent
 	data object NewTest : StudioEvent
 	data object OpenTest : StudioEvent
+	data object RequestQuit : StudioEvent
+	data object RevealLogs : StudioEvent
+	data object ShowAbout : StudioEvent
+	data object DismissAbout : StudioEvent
 	data object SaveTest : StudioEvent
 	data object SaveTestAs : StudioEvent
 	data class TestLoaded(val test: AmooTest, val path: String) : StudioEvent
@@ -350,7 +382,7 @@ sealed interface StudioEvent {
 	data object ConsoleRecordingInterrupted : StudioEvent
 	data object DismissConsoleRecording : StudioEvent
 	data object GenerateConsoleTest : StudioEvent
-	data class ShowNotice(val message: String?) : StudioEvent
+	data class ShowNotice(val message: String?, val tone: NoticeTone = NoticeTone.Info) : StudioEvent
 	data object CopyMcpConfiguration : StudioEvent
 	data object RefreshMcpStatus : StudioEvent
 	data class McpStatusLoaded(val transport: String, val arguments: List<String>) : StudioEvent
@@ -405,7 +437,9 @@ sealed interface StudioEvent {
 }
 
 fun StudioState.reduce(event: StudioEvent): StudioState {
-	val updated = reduceEvent(event)
+	val reduced = reduceEvent(event)
+	// A failure stays visible until it is dismissed, a new action clears it, or another failure replaces it.
+	val updated = if (notice?.tone == NoticeTone.Error && reduced.notice != null && reduced.notice != notice && reduced.notice.tone != NoticeTone.Error) reduced.copy(notice = notice) else reduced
 	val contextChanged = connection != updated.connection || devices != updated.devices ||
 		selectedDeviceId != updated.selectedDeviceId || toolCatalog != updated.toolCatalog ||
 		appId != updated.appId || lastSessionId != updated.lastSessionId ||
@@ -426,6 +460,22 @@ fun StudioState.reduce(event: StudioEvent): StudioState {
 	return if (contextChanged || executionChanged) updated.copy(runtimeContextRevision = runtimeContextRevision + 1) else updated
 }
 
+/** Asks before [then] discards unsaved test edits; with nothing to lose it proceeds straight away. */
+private fun StudioState.guardingUnsavedTest(then: DiscardContinuation): StudioState =
+	if (!isTestDirty) continuingAfterDiscard(then) else copy(pendingApproval = PendingApproval(
+		"Discard unsaved changes?",
+		"\"${test.name}\" has changes that are not saved. Discarding them cannot be undone.",
+		ApprovedAction.DiscardTest(then),
+		confirmLabel = "Discard changes",
+	))
+
+/** OpenTest changes nothing here: the desktop host shows the file chooser, and a loaded test replaces this one. */
+private fun StudioState.continuingAfterDiscard(then: DiscardContinuation): StudioState = when (then) {
+	DiscardContinuation.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
+	DiscardContinuation.OpenTest -> this
+	DiscardContinuation.Quit -> copy(exitRequested = true)
+}
+
 private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (event) {
 	is StudioEvent.SelectSection -> copy(section = event.section)
 	is StudioEvent.ChangeThemeMode -> copy(themeMode = event.value)
@@ -433,18 +483,22 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
 	StudioEvent.RequestInstallAmoo -> copy(pendingApproval = PendingApproval(
 		"Install Amoo via Homebrew?",
-		"Studio will run:\n$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND",
+		"Studio will run:\n$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_TRUST_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND",
 		ApprovedAction.InstallAmoo,
 		confirmLabel = "Install",
 	))
 	StudioEvent.InstallAmooStarted -> copy(amooInstall = AmooInstallState.Running, notice = null)
-	is StudioEvent.InstallAmooFinished -> copy(amooInstall = AmooInstallState.Idle, notice = event.message)
-	is StudioEvent.InstallAmooFailed -> copy(amooInstall = AmooInstallState.Failed(event.message), notice = event.message)
+	is StudioEvent.InstallAmooFinished -> copy(amooInstall = AmooInstallState.Idle, notice = Notice.success(event.message))
+	is StudioEvent.InstallAmooFailed -> copy(amooInstall = AmooInstallState.Failed(event.message), notice = Notice.error(event.message))
 	StudioEvent.CopyInstallCommands -> this
-	StudioEvent.NewTest -> copy(test = AmooTest(platform = hostPlatform.defaultTestPlatform), testPath = null, isTestDirty = false, section = StudioSection.Tests)
-	StudioEvent.OpenTest, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
-	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = "Opened ${event.path}")
-	is StudioEvent.TestSaved -> copy(testPath = event.path, isTestDirty = false, notice = "Saved ${event.path}")
+	StudioEvent.NewTest -> guardingUnsavedTest(DiscardContinuation.NewTest)
+	StudioEvent.OpenTest -> guardingUnsavedTest(DiscardContinuation.OpenTest)
+	StudioEvent.RequestQuit -> guardingUnsavedTest(DiscardContinuation.Quit)
+	StudioEvent.ShowAbout -> copy(aboutVisible = true)
+	StudioEvent.DismissAbout -> copy(aboutVisible = false)
+	StudioEvent.RevealLogs, StudioEvent.SaveTest, StudioEvent.SaveTestAs, StudioEvent.CopyMcpConfiguration, is StudioEvent.OpenReportArtifact -> this
+	is StudioEvent.TestLoaded -> copy(test = event.test, testPath = event.path, isTestDirty = false, section = StudioSection.Tests, notice = Notice.success("Opened ${event.path}"))
+	is StudioEvent.TestSaved -> copy(testPath = event.path, isTestDirty = false, notice = Notice.success("Saved ${event.path}"))
 	is StudioEvent.ChangeTestName -> copy(test = test.copy(name = event.value), isTestDirty = true)
 	is StudioEvent.ChangeTestDescription -> copy(test = test.copy(description = event.value), isTestDirty = true)
 	is StudioEvent.ChangeTestPlatform -> copy(test = test.copy(platform = event.value), isTestDirty = true)
@@ -460,7 +514,7 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 				else plan.copy(operations = plan.operations + command)
 			}),
 			isTestDirty = true,
-			notice = "Added command to ${test.name}",
+			notice = Notice.success("Added command to ${test.name}"),
 		)
 	}
 	is StudioEvent.RemoveTestPlanOperation -> copy(
@@ -481,20 +535,20 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 		isTestDirty = true,
 	)
 	StudioEvent.RunTest -> this
-	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = "Test run cancelled")
+	StudioEvent.CancelTestRun -> copy(testExecution = TestExecution.Idle, notice = Notice.info("Test run cancelled"))
 	StudioEvent.ExportTest -> this
 	StudioEvent.TestExportStarted -> copy(testExportInProgress = true, notice = null)
-	is StudioEvent.TestExportFinished -> copy(testExportInProgress = false, notice = event.message)
-	is StudioEvent.TestExportFailed -> copy(testExportInProgress = false, notice = event.message)
+	is StudioEvent.TestExportFinished -> copy(testExportInProgress = false, notice = Notice.success(event.message))
+	is StudioEvent.TestExportFailed -> copy(testExportInProgress = false, notice = Notice.error(event.message))
 	is StudioEvent.TestRunStarted -> copy(testExecution = TestExecution.Running(event.message), notice = null)
 	is StudioEvent.TestRunProgress -> copy(testExecution = TestExecution.Running(event.message, event.runId, event.currentOperation, event.totalOperations))
-	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = event.message, lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)
-	is StudioEvent.TestRunFailed -> copy(testExecution = TestExecution.Idle, notice = event.message)
+	is StudioEvent.TestRunFinished -> copy(testExecution = TestExecution.Idle, notice = Notice.success(event.message), lastSessionId = event.sessionId ?: lastSessionId, lastReportId = event.reportId ?: lastReportId)
+	is StudioEvent.TestRunFailed -> copy(testExecution = TestExecution.Idle, notice = Notice.error(event.message))
 	StudioEvent.RefreshReports -> copy(reportsLoading = true, notice = null)
 	is StudioEvent.ReportsLoaded -> copy(reports = event.reports, reportsLoading = false, selectedReportId = selectedReportId?.takeIf { id -> event.reports.any { it.id == id } } ?: event.reports.firstOrNull()?.id)
-	is StudioEvent.ReportsFailed -> copy(reportsLoading = false, notice = event.message)
+	is StudioEvent.ReportsFailed -> copy(reportsLoading = false, notice = Notice.error(event.message))
 	is StudioEvent.SelectReport -> copy(selectedReportId = event.id)
-	is StudioEvent.SaveProvider -> if (!canSaveProvider(event.profile)) copy(notice = if (event.profile.id in providerApiKeysSaving) "Wait for the API key to finish saving before editing this provider." else "Read the stored API key before editing this provider.") else copy(
+	is StudioEvent.SaveProvider -> if (!canSaveProvider(event.profile)) copy(notice = Notice.error(if (event.profile.id in providerApiKeysSaving) "Wait for the API key to finish saving before editing this provider." else "Read the stored API key before editing this provider.")) else copy(
 		providers = if (providers.any { it.id == event.profile.id }) providers.map { if (it.id == event.profile.id) event.profile else it } else providers + event.profile,
 		selectedProviderId = event.profile.id,
 		providerChecks = providerChecks - event.profile.id,
@@ -502,7 +556,7 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 		providerDraft = newProviderDraft(),
 		providerApiKeysSaving = providerApiKeysSaving + event.profile.id,
 		providerApiKeyDeletionFailures = providerApiKeyDeletionFailures - event.profile.id,
-		notice = "Provider profile saved",
+		notice = Notice.success("Provider profile saved"),
 	)
 	is StudioEvent.RemoveProvider -> copy(
 		providers = providers.filterNot { it.id == event.id },
@@ -538,10 +592,10 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	StudioEvent.SendChat -> this
 	is StudioEvent.ChatRequestStarted -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message, operation = ChatOperation.Sending, lastError = null), notice = null)
 	is StudioEvent.ChatResponseReceived -> copy(chat = chat.copy(messages = chat.messages + event.message, operation = ChatOperation.Idle, proposedPlan = event.proposedPlan))
-	StudioEvent.ApplyProposedPlan -> chat.proposedPlan?.let { proposal -> copy(test = test.copy(compiledPlan = proposal), isTestDirty = true, chat = chat.copy(proposedPlan = null), notice = "Applied AI plan to ${test.name}") } ?: this
-	StudioEvent.RejectProposedPlan -> copy(chat = chat.copy(proposedPlan = null), notice = "AI plan discarded")
-	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle, lastError = event.message), notice = event.message)
-	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = "AI request cancelled")
+	StudioEvent.ApplyProposedPlan -> chat.proposedPlan?.let { proposal -> copy(test = test.copy(compiledPlan = proposal), isTestDirty = true, chat = chat.copy(proposedPlan = null), notice = Notice.success("Applied AI plan to ${test.name}")) } ?: this
+	StudioEvent.RejectProposedPlan -> copy(chat = chat.copy(proposedPlan = null), notice = Notice.info("AI plan discarded"))
+	is StudioEvent.ChatRequestFailed -> copy(chat = chat.copy(operation = ChatOperation.Idle, lastError = event.message), notice = Notice.error(event.message))
+	StudioEvent.CancelChat -> copy(chat = chat.copy(operation = ChatOperation.Idle), notice = Notice.info("AI request cancelled"))
 	StudioEvent.ClearChat -> copy(chat = ChatState())
 	StudioEvent.RetryLastChat -> copy(chat = chat.copy(input = chat.messages.lastOrNull { it.role == ChatRole.User }?.content.orEmpty(), lastError = null))
 	is StudioEvent.ChangeConsoleInput -> if (event.value == console.input) this else copy(console = console.copy(input = event.value, historyIndex = null))
@@ -565,12 +619,12 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 		historyIndex = null,
 		recording = console.recording?.recording(event.entry),
 	))
-	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = "Command cancelled")
+	StudioEvent.CancelConsoleCommand -> copy(console = console.copy(operation = ConsoleOperation.Idle), notice = Notice.info("Command cancelled"))
 	StudioEvent.ClearConsole -> copy(console = ConsoleState(recording = console.recording))
 	StudioEvent.StartConsoleRecording, is StudioEvent.ConsoleRecordingStarted, StudioEvent.StopConsoleRecording, is StudioEvent.ConsoleRecordingStopped,
 	is StudioEvent.ConsoleRecordingFailed, StudioEvent.ConsoleRecordingInterrupted, StudioEvent.DismissConsoleRecording, StudioEvent.GenerateConsoleTest,
 	-> reduceConsoleRecording(event)
-	is StudioEvent.ShowNotice -> copy(notice = event.message)
+	is StudioEvent.ShowNotice -> copy(notice = event.message?.let { Notice(it, event.tone) })
 	StudioEvent.RefreshMcpStatus -> copy(mcpStatus = McpStatus.Checking)
 	is StudioEvent.McpStatusLoaded -> copy(mcpStatus = McpStatus.Ready(event.transport, event.arguments))
 	is StudioEvent.McpStatusFailed -> copy(mcpStatus = McpStatus.Unavailable(event.reason))
@@ -590,10 +644,14 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	is StudioEvent.ChangeAppId -> copy(appId = event.value)
 	is StudioEvent.ChangeSchemeOrModule -> copy(schemeOrModule = event.value)
 	StudioEvent.RequestResetAppData -> copy(pendingApproval = PendingApproval("Erase app data?", "This removes all local data for $appId on the selected device. The action cannot be undone.", ApprovedAction.ResetAppData, confirmLabel = "Erase data"))
-	is StudioEvent.ResolveApproval -> copy(pendingApproval = null)
-	is StudioEvent.DeviceOperationFailed -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message)
+	is StudioEvent.ResolveApproval -> {
+		val action = pendingApproval?.action
+		val resolved = copy(pendingApproval = null)
+		if (event.approved && action is ApprovedAction.DiscardTest) resolved.continuingAfterDiscard(action.then) else resolved
+	}
+	is StudioEvent.DeviceOperationFailed -> copy(deviceOperation = DeviceOperation.Idle, notice = Notice.error(event.message))
 	is StudioEvent.DeviceOperationStarted -> copy(deviceOperation = DeviceOperation.Working(event.message), notice = null)
-	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = event.message, lastBuildArtifact = event.artifact ?: lastBuildArtifact)
+	is StudioEvent.DeviceOperationFinished -> copy(deviceOperation = DeviceOperation.Idle, notice = Notice.success(event.message), lastBuildArtifact = event.artifact ?: lastBuildArtifact)
 	is StudioEvent.MirrorStarting -> copy(mirror = mirror.copy(status = MirrorStatus.Starting, deviceId = event.deviceId, frame = mirror.frame.takeIf { mirror.deviceId == event.deviceId }))
 	// A frame from a stream that was already replaced (another device) is dropped.
 	is StudioEvent.MirrorFrameReceived -> if (event.deviceId != mirror.deviceId) this else copy(mirror = mirror.copy(status = MirrorStatus.Live, frame = event.frame, framesPerSecond = event.framesPerSecond))
@@ -611,7 +669,7 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	)
 	is StudioEvent.AgentEventReceived -> applyingAgentRun(agentRun?.applying(event.event))
 	is StudioEvent.AgentEventsReplayed -> applyingAgentRun(agentRun?.takeIf { it.runId == event.runId }?.replaying(event.events, event.status, event.nextSeq))
-	is StudioEvent.AgentRunFailed -> copy(chat = chat.copy(lastError = event.message), notice = event.message)
+	is StudioEvent.AgentRunFailed -> copy(chat = chat.copy(lastError = event.message), notice = Notice.error(event.message))
 	StudioEvent.CancelAgentRun, StudioEvent.SteerAgentRun -> this
 	is StudioEvent.AgentSteered -> copy(chat = chat.copy(input = "", messages = chat.messages + event.message))
 	StudioEvent.DismissAgentRun -> if (agentRun?.status?.isTerminal != false) copy(agentRun = null) else this
@@ -631,7 +689,7 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 		selectedOperationId = generatedTest.selectedOperationId?.takeIf { id -> event.test.compiledPlan?.toolOperations?.any { it.id == id } == true }
 			?: event.test.compiledPlan?.toolOperations?.firstOrNull()?.id,
 	))
-	is StudioEvent.TestGenerationFailed -> copy(generatedTest = generatedTest?.copy(loading = false), notice = event.message)
+	is StudioEvent.TestGenerationFailed -> copy(generatedTest = generatedTest?.copy(loading = false), notice = Notice.error(event.message))
 	is StudioEvent.SelectGeneratedOperation -> copy(generatedTest = generatedTest?.copy(selectedOperationId = event.operationId))
 	is StudioEvent.ChangeGeneratedTestLayout -> copy(generatedTest = generatedTest?.copy(
 		operationsSplit = coerceSplit(event.operationsSplit ?: generatedTest.operationsSplit, SplitPaneDefaults.MIN_SPLIT, SplitPaneDefaults.MAX_SPLIT),

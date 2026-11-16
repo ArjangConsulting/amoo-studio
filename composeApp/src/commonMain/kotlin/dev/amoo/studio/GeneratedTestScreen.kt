@@ -126,7 +126,7 @@ const val TESTS_GENERATE_CAPABILITY = "tests.generate"
 			ThemeSingleChoiceSegmentedButtonRow(UiToolkit.entries.map { it.label }, UiToolkit.entries.indexOf(generated.uiToolkit), { onEvent(StudioEvent.ChangeGeneratedTestOptions(uiToolkit = UiToolkit.entries[it])) })
 		}
 		SecondaryButton("Regenerate", { onEvent(StudioEvent.RegenerateTest(generated.allowIncomplete)) }, enabled = !generated.loading)
-		CopyButton(generated.generated?.source.orEmpty(), enabled = generated.generated != null, onCopied = { onEvent(StudioEvent.ShowNotice("Copied generated test")) })
+		CopyButton(generated.generated?.source.orEmpty(), enabled = generated.generated != null, onCopied = { onEvent(StudioEvent.ShowNotice("Copied generated test", NoticeTone.Success)) })
 		PrimaryButton("Save as…", { onEvent(StudioEvent.SaveGeneratedTest) }, enabled = generated.generated != null)
 	}
 }

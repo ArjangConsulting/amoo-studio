@@ -30,7 +30,7 @@ class ConsoleRecordingTest {
 
 		val unsupported = ready.copy(connection = ConnectionState.Ready("1", 1, emptyList())).reduce(StudioEvent.StartConsoleRecording)
 		assertNull(unsupported.console.recording)
-		assertTrue(unsupported.notice!!.contains("Update Amoo"))
+		assertTrue(unsupported.noticeMessage!!.contains("Update Amoo"))
 		assertNull(ready.copy(selectedDeviceId = null).reduce(StudioEvent.StartConsoleRecording).console.recording)
 		assertNull(ready.copy(appId = "").reduce(StudioEvent.StartConsoleRecording).console.recording)
 	}
@@ -85,7 +85,7 @@ class ConsoleRecordingTest {
 	fun `a failed start clears the recording, and a failed stop keeps recording`() {
 		val failedStart = ready.reduce(StudioEvent.StartConsoleRecording).reduce(StudioEvent.ConsoleRecordingFailed("Could not start recording: busy"))
 		assertNull(failedStart.console.recording)
-		assertEquals("Could not start recording: busy", failedStart.notice)
+		assertEquals("Could not start recording: busy", failedStart.noticeMessage)
 
 		val failedStop = recording().reduce(StudioEvent.StopConsoleRecording).reduce(StudioEvent.ConsoleRecordingFailed("Could not stop"))
 		assertEquals(ConsoleRecordingStatus.Recording, failedStop.console.recording?.status)

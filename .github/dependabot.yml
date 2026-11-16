@@ -12,6 +12,9 @@ updates:
     directory: /
     labels:
       - dependencies
+    ignore:
+      # Not published yet: resolved from a pinned sibling checkout, which Dependabot cannot authenticate to.
+      - dependency-name: com.arjangconsulting.codeeditor:code-editor
     patterns:
       - '*'
     multi-ecosystem-group: dependencies

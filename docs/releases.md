@@ -24,6 +24,14 @@ by checksum, and runs the extracted `amoo`. That copy finds the prebuilt compani
 users never compile companion apps. `composeApp/app-resources/README.md` explains why the archive
 is not unpacked into the app bundle.
 
+The workflow takes only the Amoo tag as input. It reads the Studio version from `studioVersion` in
+`gradle.properties`, requires it to be bare SemVer, and fails when a release or tag with that name
+already exists. It runs `desktopTest` and `koverVerify` first, and after packaging launches the
+packaged app (under Xvfb on Linux) and waits for `handshake.ok` in Studio's own log, so a package
+that cannot start its embedded Amoo never reaches the draft release. The draft carries a
+`SHA256SUMS` file for every artifact. Signing and notarization are not wired up yet; until they are,
+macOS downloads are blocked by Gatekeeper.
+
 The release targets Apple Silicon macOS (DMG/PKG) and x64 Linux (DEB). The Amoo version must be a
 release that publishes prebuilt companions and tarball checksums. Amoo 0.2.1 has neither, so it
 cannot be embedded. The workflow creates a draft GitHub release so the artifacts and platform

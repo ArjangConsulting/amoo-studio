@@ -50,6 +50,9 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 				SecondaryButton("Check again", { onEvent(StudioEvent.RefreshMcpStatus) }, enabled = state.connection.supports("mcp.status") && state.mcpStatus !is McpStatus.Checking)
 			}
 		}
+		SectionCard("Diagnostics", Modifier.fillMaxWidth(), description = "Studio keeps a rotating log of its own activity and Amoo's connection. Attach it to bug reports; it never contains API keys or chat text.") {
+			SecondaryButton("Reveal logs", { onEvent(StudioEvent.RevealLogs) })
+		}
 		SectionHeader("AI providers", titleStyle = MaterialTheme.typography.titleLarge)
 		if (!state.providerApiKeysLoaded) InlineProgressIndicator("Reading stored API keys…")
 		state.providerApiKeyDeletionFailures.forEach { (id, message) -> key("delete-$id") {
@@ -63,7 +66,7 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable private fun ProviderCard(profile: ProviderProfile, state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	SelectableCard(profile.id == state.selectedProviderId, { onEvent(StudioEvent.SelectProvider(profile.id)) }, Modifier.fillMaxWidth()) {
-		SectionHeader(profile.name, subtitle = "${profile.kind.label} · ${profile.model}", titleStyle = MaterialTheme.typography.titleMedium)
+		SectionHeader(profile.name, subtitle = "${profile.kind.label} · ${profile.model.ifBlank { "model not set" }}", titleStyle = MaterialTheme.typography.titleMedium)
 		val credential = when {
 			!profile.apiKey.isBlank -> "API key ${profile.apiKey.hint} · " + when {
 				profile.id in state.providerApiKeysSaving -> "saving to keychain"

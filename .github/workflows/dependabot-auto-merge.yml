@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
+  actions: write
   checks: read
   contents: write
   pull-requests: write
@@ -85,4 +85,6 @@ jobs:
             fi
 
             gh pr merge "$number" --repo "$GH_REPO" --squash --match-head-commit "$head_sha"
+            # Merges made with the workflow token do not trigger the push workflow, so verify main explicitly.
+            gh workflow run CI --repo "$GH_REPO" --ref "$DEFAULT_BRANCH"
           done

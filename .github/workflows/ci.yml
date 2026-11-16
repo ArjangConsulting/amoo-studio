@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Dependabot auto-merge merges with the workflow token, and such merges never trigger push
+  # workflows, so it dispatches CI on main itself.
+  workflow_dispatch:
 
 env:
   ORG_GRADLE_PROJECT_useLocalCodeEditor: "true"

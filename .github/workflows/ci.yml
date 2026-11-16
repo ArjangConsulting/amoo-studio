@@ -39,6 +39,17 @@ jobs:
           name: coverage-report
           path: composeApp/build/reports/kover/report.xml
 
+  protocol-smoke:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Amoo
+        run: |
+          brew tap arjangconsulting/tap
+          brew install amoo
+      - name: Exercise the real studio protocol
+        run: python3 scripts/studio-protocol-smoke.py --amoo "$(brew --prefix)/bin/amoo"
+
   package-macos:
     runs-on: macos-15
     steps:

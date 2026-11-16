@@ -23,7 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
@@ -938,10 +938,18 @@ internal class StudioController(
 
 	/** Remembers the working context across launches. Dragging the divider emits many fractions, so writes wait for the state to settle. */
 	@OptIn(FlowPreview::class)
-	private fun persistSession() = scope.launch {
-		state.map { PersistedSession(it.projectPath, it.appId, it.schemeOrModule, it.selectedProviderId, it.selectedDeviceId, it.workbenchSplit) }
-			.distinctUntilChanged().drop(1).debounce(500)
-			.collect { session -> runCatching { studioPreferences.saveSession(session) }.onFailure { log.error("session.persist", it) } }
+	private fun persistSession() {
+		fun StudioState.session() = PersistedSession(projectPath, appId, schemeOrModule, selectedProviderId, selectedDeviceId, workbenchSplit)
+		// Compared with what was last stored, not skipped by position: the first change can arrive before collection starts.
+		var persisted = state.value.session()
+		scope.launch {
+			state.map { it.session() }.distinctUntilChanged().debounce(500).filter { it != persisted }
+				.collect { session ->
+					runCatching { studioPreferences.saveSession(session) }
+						.onSuccess { persisted = session }
+						.onFailure { log.error("session.persist", it) }
+				}
+		}
 	}
 
 	fun persistWindowSize(size: WindowSize) {

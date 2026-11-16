@@ -1,4 +1,6 @@
 import java.security.MessageDigest
+import kotlinx.kover.gradle.plugin.dsl.AggregationType
+import kotlinx.kover.gradle.plugin.dsl.CoverageUnit
 import javax.inject.Inject
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
@@ -61,7 +63,14 @@ kover {
 	reports {
 		verify {
 			rule("Studio line coverage") {
-				minBound(50)
+				minBound(80)
+			}
+			rule("Studio branch coverage") {
+				bound {
+					coverageUnits = CoverageUnit.BRANCH
+					aggregationForGroup = AggregationType.COVERED_PERCENTAGE
+					minValue = 50
+				}
 			}
 		}
 	}

@@ -107,35 +107,3 @@ class ProviderStoreTest {
 	}
 
 }
-
-private class FakeKeychain : CredentialKeychain {
-	val entries = mutableMapOf<String, String>()
-	val readFailures = mutableMapOf<String, Throwable>()
-	var mutationFailure: Throwable? = null
-	val reads = CallRecorder<String>()
-	val deletions = CallRecorder<String>()
-	val clears = CallRecorder<Unit>()
-
-	override fun read(key: String): String? {
-		reads.record(key)
-		readFailures[key]?.let { throw it }
-		return entries[key]
-	}
-
-	override fun write(key: String, value: String) {
-		mutationFailure?.let { throw it }
-		require(value.isNotBlank()) { "blank values are rejected" }
-		entries[key] = value
-	}
-
-	override fun delete(key: String) {
-		mutationFailure?.let { throw it }
-		deletions.record(key)
-		entries.remove(key)
-	}
-
-	override fun clear() {
-		clears.record(Unit)
-		entries.clear()
-	}
-}

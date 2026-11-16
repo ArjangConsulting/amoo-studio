@@ -19,6 +19,11 @@ class StudioControllerTest {
 		StudioControllerFixture().use { it.block() }
 	}
 
+	private suspend fun StudioControllerFixture.useOllama() {
+		awaitState { it.providerApiKeysLoaded }
+		send(StudioEvent.SaveProvider(ProviderProfile("ollama", "Local Ollama", ProviderKind.Ollama, "http://localhost:11434", "llama3")))
+	}
+
 	// MARK: Handshake and connection
 
 	@Test
@@ -69,8 +74,8 @@ class StudioControllerTest {
 		rpc.reply("tools.catalog", failure("no catalog"))
 		connect(TOOLS_CATALOG_CAPABILITY)
 
-		val updated = awaitState { it.notice != null }
-		assertTrue("Could not load Amoo's tool catalog" in updated.notice.orEmpty())
+		val updated = awaitState { it.noticeMessage != null }
+		assertTrue("Could not load Amoo's tool catalog" in updated.noticeMessage.orEmpty())
 		assertEquals(ToolCatalog.Legacy, updated.toolCatalog)
 		assertIs<ConnectionState.Ready>(updated.connection)
 	}
@@ -98,22 +103,22 @@ class StudioControllerTest {
 		selectRunningDevice()
 
 		send(StudioEvent.RefreshDevices)
-		assertTrue("devices.list" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("devices.list" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 
 		send(StudioEvent.ShowNotice(null), StudioEvent.RunTest)
-		assertTrue("tests.run" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("tests.run" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 
 		send(StudioEvent.ShowNotice(null), StudioEvent.ExportTest)
-		assertTrue("tests.export" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("tests.export" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 
 		send(StudioEvent.ShowNotice(null), StudioEvent.ExecuteConsoleCommand)
-		assertTrue("repl.execute" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("repl.execute" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 
 		send(StudioEvent.ShowNotice(null), StudioEvent.CheckProvider("ollama"))
-		assertTrue("providers.check" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("providers.check" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 
 		send(StudioEvent.RefreshReports)
-		awaitState { it.notice?.contains("reports.list") == true }
+		awaitState { it.noticeMessage?.contains("reports.list") == true }
 
 		assertEquals(listOf("system.handshake"), rpc.calls.values().map { it.method })
 	}
@@ -139,7 +144,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.RefreshDevices)
 
-		assertTrue("simctl missing" in awaitState { it.notice != null }.notice.orEmpty())
+		assertTrue("simctl missing" in awaitState { it.noticeMessage != null }.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -150,7 +155,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.StartDevice("sim-9"))
 
-		awaitState { it.notice == "Started" }
+		awaitState { it.noticeMessage == "Started" }
 		assertEquals("sim-9", rpc.requests("devices.start").single().jsonObject["id"]?.jsonPrimitive?.content)
 		awaitState { rpc.count("devices.list") == 1 }
 	}
@@ -162,8 +167,8 @@ class StudioControllerTest {
 
 		send(StudioEvent.StartDevice("sim-9"))
 
-		val updated = awaitState { it.notice != null }
-		assertTrue("boot failed" in updated.notice.orEmpty())
+		val updated = awaitState { it.noticeMessage != null }
+		assertTrue("boot failed" in updated.noticeMessage.orEmpty())
 		assertEquals(DeviceOperation.Idle, updated.deviceOperation)
 	}
 
@@ -186,7 +191,7 @@ class StudioControllerTest {
 		val finished = awaitState { it.testExecution == TestExecution.Idle }
 		assertEquals("r-1", finished.lastReportId)
 		assertEquals("s-1", finished.lastSessionId)
-		assertEquals("Passed", finished.notice)
+		assertEquals("Passed", finished.noticeMessage)
 		assertEquals(0, rpc.count("tests.status"))
 	}
 
@@ -206,8 +211,8 @@ class StudioControllerTest {
 
 		send(StudioEvent.RunTest)
 
-		val finished = awaitState { it.testExecution == TestExecution.Idle && it.notice != null }
-		assertEquals("Step 3 failed", finished.notice)
+		val finished = awaitState { it.testExecution == TestExecution.Idle && it.noticeMessage != null }
+		assertEquals("Step 3 failed", finished.noticeMessage)
 		assertEquals(3, rpc.count("tests.status"))
 	}
 
@@ -219,8 +224,8 @@ class StudioControllerTest {
 
 		send(StudioEvent.RunTest)
 
-		val updated = awaitState { it.testExecution == TestExecution.Idle && it.notice != null }
-		assertTrue("Test run failed: no provider" in updated.notice.orEmpty())
+		val updated = awaitState { it.testExecution == TestExecution.Idle && it.noticeMessage != null }
+		assertTrue("Test run failed: no provider" in updated.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -232,7 +237,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.RunTest)
 
-		assertTrue("other" in awaitState { it.testExecution == TestExecution.Idle && it.notice != null }.notice.orEmpty())
+		assertTrue("other" in awaitState { it.testExecution == TestExecution.Idle && it.noticeMessage != null }.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -264,7 +269,7 @@ class StudioControllerTest {
 		send(StudioEvent.RunTest)
 
 		val finished = awaitState { it.lastReportId == "r-2" }
-		assertEquals("All steps passed", finished.notice)
+		assertEquals("All steps passed", finished.noticeMessage)
 		assertEquals(TestExecution.Idle, finished.testExecution)
 	}
 
@@ -274,7 +279,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.RunTest)
 
-		assertEquals("Choose a device before running the test", state.notice)
+		assertEquals("Choose a device before running the test", state.noticeMessage)
 		assertEquals(0, rpc.count("tests.start"))
 	}
 
@@ -283,7 +288,8 @@ class StudioControllerTest {
 	private suspend fun StudioControllerFixture.prepareAgent() {
 		connect(AGENT_RUNS_CAPABILITY)
 		selectRunningDevice()
-		send(StudioEvent.ChangeAppId("dev.app"), StudioEvent.SelectProvider("ollama"), StudioEvent.ChangeChatInput("Sign in"))
+		useOllama()
+		send(StudioEvent.ChangeAppId("dev.app"), StudioEvent.ChangeChatInput("Sign in"))
 	}
 
 	@Test
@@ -335,7 +341,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.SendChat)
 
-		assertTrue("Agent run failed to start: no model" in awaitState { it.chat.lastError != null || it.notice != null }.let { it.chat.lastError.orEmpty() + it.notice.orEmpty() })
+		assertTrue("Agent run failed to start: no model" in awaitState { it.chat.lastError != null }.chat.lastError.orEmpty())
 	}
 
 	@Test
@@ -364,7 +370,8 @@ class StudioControllerTest {
 	@Test
 	fun `a conversation without a device uses plain chat and persists the history`() = fixture {
 		connect("chat.send")
-		send(StudioEvent.SelectProvider("ollama"), StudioEvent.ChangeChatInput("Hello"))
+		useOllama()
+		send(StudioEvent.ChangeChatInput("Hello"))
 		rpc.reply("chat.send", ok("""{"message":"Hi there"}"""))
 
 		send(StudioEvent.SendChat)
@@ -378,7 +385,8 @@ class StudioControllerTest {
 	@Test
 	fun `a chat failure is shown and clearing chat empties the saved history`() = fixture {
 		connect("chat.send")
-		send(StudioEvent.SelectProvider("ollama"), StudioEvent.ChangeChatInput("Hello"))
+		useOllama()
+		send(StudioEvent.ChangeChatInput("Hello"))
 		rpc.reply("chat.send", failure("provider down"))
 
 		send(StudioEvent.SendChat)
@@ -395,7 +403,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.SendChat)
 
-		assertEquals("Choose an AI provider before sending a message", state.notice)
+		assertEquals("Choose an AI provider before sending a message", state.noticeMessage)
 		assertEquals(0, rpc.count("chat.send"))
 	}
 
@@ -454,8 +462,8 @@ class StudioControllerTest {
 
 		send(StudioEvent.StartConsoleRecording)
 
-		val updated = awaitState { it.notice != null && it.console.recording == null }
-		assertTrue("companion build failed" in updated.notice.orEmpty())
+		val updated = awaitState { it.noticeMessage != null && it.console.recording == null }
+		assertTrue("companion build failed" in updated.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -470,9 +478,9 @@ class StudioControllerTest {
 
 		send(StudioEvent.StopConsoleRecording)
 
-		val updated = awaitState { it.notice != null }
+		val updated = awaitState { it.noticeMessage != null }
 		assertEquals(ConsoleRecordingStatus.Recording, updated.console.recording?.status)
-		assertTrue("disk full" in updated.notice.orEmpty())
+		assertTrue("disk full" in updated.noticeMessage.orEmpty())
 	}
 
 	// MARK: Providers
@@ -539,6 +547,7 @@ class StudioControllerTest {
 	@Test
 	fun `a provider check reports success and failure`() = fixture {
 		connect("providers.check", PROVIDER_API_KEY_CAPABILITY)
+		useOllama()
 		rpc.reply("providers.check", listOf(ok("""{"message":"Reachable"}"""), failure("401")))
 
 		send(StudioEvent.CheckProvider("ollama"))
@@ -624,7 +633,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.OpenTest)
 
-		assertTrue("Could not open test" in state.notice.orEmpty())
+		assertTrue("Could not open test" in state.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -654,7 +663,7 @@ class StudioControllerTest {
 		send(StudioEvent.SaveGeneratedTest)
 
 		assertEquals("import XCTest", target.readText())
-		assertEquals("Saved SignInTest.swift", state.notice)
+		assertEquals("Saved SignInTest.swift", state.noticeMessage)
 	}
 
 	@Test
@@ -662,7 +671,7 @@ class StudioControllerTest {
 		connect(TESTS_GENERATE_CAPABILITY)
 		rpc.reply("tests.generate", failure("emitter crashed"))
 		send(StudioEvent.GenerateTest(GenerationSource.AuthoredTest))
-		assertTrue("emitter crashed" in awaitState { it.generatedTest?.loading == false }.generatedTest?.problem?.message.orEmpty() + state.notice.orEmpty())
+		assertTrue("emitter crashed" in awaitState { it.generatedTest?.loading == false }.generatedTest?.problem?.message.orEmpty() + state.noticeMessage.orEmpty())
 	}
 
 	@Test
@@ -675,7 +684,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.ExportTest)
 
-		awaitState { it.notice == "Exported CheckoutTest.kt" }
+		awaitState { it.noticeMessage == "Exported CheckoutTest.kt" }
 		assertEquals("class CheckoutTest", target.readText())
 		assertFalse(state.testExportInProgress)
 	}
@@ -686,7 +695,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.ExportTest)
 
-		assertEquals("Add at least one action before exporting a test", state.notice)
+		assertEquals("Add at least one action before exporting a test", state.noticeMessage)
 		assertEquals(0, rpc.count("tests.export"))
 	}
 
@@ -698,7 +707,7 @@ class StudioControllerTest {
 
 		send(StudioEvent.ExportTest)
 
-		awaitState { it.notice == "Export cancelled" }
+		awaitState { it.noticeMessage == "Export cancelled" }
 	}
 
 	// MARK: MCP and session persistence
@@ -738,5 +747,26 @@ class StudioControllerTest {
 		controller.close()
 
 		assertTrue(rpc.closed)
+	}
+
+	@Test
+	fun `a provider without a model is refused until one is chosen`() = fixture {
+		connect("chat.send")
+		awaitState { it.providerApiKeysLoaded }
+		send(StudioEvent.SelectProvider("ollama"), StudioEvent.ChangeChatInput("Hello"))
+
+		send(StudioEvent.SendChat)
+
+		assertTrue("Choose a model" in state.noticeMessage.orEmpty())
+		assertEquals(0, rpc.count("chat.send"))
+	}
+
+	@Test
+	fun `the window position is stored with its size`() = fixture {
+		controller.persistWindowBounds(WindowOrigin(40, 60), WindowSize(1100, 700))
+
+		val stored = StudioPreferences(preferences)
+		assertEquals(WindowOrigin(40, 60), stored.windowOrigin())
+		assertEquals(WindowSize(1100, 700), stored.windowSize())
 	}
 }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -181,5 +182,66 @@ class StudioScreensUiTest {
 		onNodeWithText("Discard changes").performClick()
 
 		assertTrue(StudioEvent.ResolveApproval(true) in events.values())
+	}
+
+	@Test
+	fun overviewSummarisesCapabilitiesAndGuidesFirstRun() = runComposeUiTest {
+		val events = CallRecorder<StudioEvent>()
+		val state = StudioState(connection = ConnectionState.Ready("0.9", STUDIO_PROTOCOL_VERSION, listOf("repl.execute", "chat.send", "devices.list")))
+		setContent { Host { OverviewContent(state) { events.record(it) } } }
+
+		onNodeWithText("Protocol 1 · 3 capabilities").assertExists()
+		onNodeWithText("chat.send, devices.list, repl.execute").assertDoesNotExist()
+		onNodeWithText("Show capabilities").performClick()
+		onNodeWithText("chat.send, devices.list, repl.execute").assertExists()
+		onNodeWithText("Get started").assertExists()
+		onNodeWithText("Open Devices").performClick()
+		assertTrue(StudioEvent.SelectSection(StudioSection.Devices) in events.values())
+	}
+
+	@Test
+	fun overviewHidesTheChecklistOnceEverythingIsReady() = runComposeUiTest {
+		val state = StudioState(
+			connection = ConnectionState.Ready("0.9", STUDIO_PROTOCOL_VERSION, emptyList()),
+			devices = listOf(device),
+			selectedDeviceId = device.id,
+			providers = listOf(defaultProviders().single().copy(model = "llama3")),
+			selectedProviderId = "ollama",
+		)
+		setContent { Host { OverviewContent(state) {} } }
+
+		onNodeWithText("Get started").assertDoesNotExist()
+	}
+
+	@Test
+	fun reportsShowLocalizedTimesAndHumanDurations() = runComposeUiTest {
+		val report = TestReport("r-1", "Sign in", ReportStatus.Passed, "2026-11-01T10:30:00Z", durationMillis = 185_000, deviceName = "iPhone 17")
+		val state = StudioState(connection = ConnectionState.Ready("0.9", STUDIO_PROTOCOL_VERSION, listOf("reports.list")), reports = listOf(report), selectedReportId = "r-1")
+		setContent {
+			Host { CompositionLocalProvider(LocalTimestampFormatter provides TimestampFormatter { "1 Nov 2026" }) { ReportsContent(state) {} } }
+		}
+
+		onAllNodesWithText("1 Nov 2026 · iPhone 17").assertCountEquals(1)
+		onNodeWithText("3 min 05 s").assertExists()
+	}
+
+	@Test
+	fun aboutShowsTheStudioAndAmooVersions() = runComposeUiTest {
+		val events = CallRecorder<StudioEvent>()
+		val state = StudioState(connection = ConnectionState.Ready("0.9.1", STUDIO_PROTOCOL_VERSION, emptyList())).reduce(StudioEvent.ShowAbout)
+		setContent { Host { AmooStudioApp(state) { events.record(it) } } }
+
+		onNodeWithText("Version ${StudioBuildInfo.VERSION}", substring = true).assertExists()
+		onNodeWithText("Studio protocol $STUDIO_PROTOCOL_VERSION", substring = true).assertExists()
+		onNodeWithText("Close").performClick()
+		assertTrue(StudioEvent.DismissAbout in events.values())
+	}
+
+	@Test
+	fun failuresAndSuccessesAreBothShown() = runComposeUiTest {
+		val failed = StudioState().reduce(StudioEvent.ShowNotice("Device discovery failed", NoticeTone.Error))
+		setContent { Host { AmooStudioApp(failed) {} } }
+
+		onNodeWithText("Device discovery failed").assertExists()
 	}
 }

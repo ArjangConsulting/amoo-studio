@@ -14,6 +14,8 @@ import io.github.maniramezan.kmpcomponents.NoticeCard
 import io.github.maniramezan.kmpcomponents.SectionHeader
 import io.github.maniramezan.kmpcomponents.SidebarItem
 import io.github.maniramezan.kmpcomponents.SidebarNavigation
+import io.github.maniramezan.kmpcomponents.StatusTone
+import io.github.maniramezan.kmpcomponents.ThemeDialog
 import io.github.maniramezan.kmpcomponents.ThemeMode as KmpThemeMode
 import io.github.maniramezan.kmpcomponents.kmpSpacing
 
@@ -38,8 +40,8 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 					verticalArrangement = Arrangement.spacedBy(MaterialTheme.kmpSpacing.medium),
 				) {
 					SectionHeader(state.section.title, titleStyle = MaterialTheme.typography.headlineLarge)
-					state.notice?.let { message ->
-						NoticeCard(message, onDismiss = { onEvent(StudioEvent.ShowNotice(null)) })
+					state.notice?.let { notice ->
+						NoticeCard(notice.message, tone = notice.tone.toStatusTone(), onDismiss = { onEvent(StudioEvent.ShowNotice(null)) })
 					}
 					Box(Modifier.weight(1f).fillMaxWidth()) {
 						when (state.section) {
@@ -65,9 +67,16 @@ fun AmooStudioApp(state: StudioState, onEvent: (StudioEvent) -> Unit) {
 					destructive = approval.action != ApprovedAction.InstallAmoo,
 				)
 			}
+			if (state.aboutVisible) AboutDialog(state.connection, onDismiss = { onEvent(StudioEvent.DismissAbout) })
 			state.createDevice?.let { form -> CreateDeviceDialog(state, form, onEvent) }
 		}
 	}
+}
+
+internal fun NoticeTone.toStatusTone(): StatusTone = when (this) {
+	NoticeTone.Info -> StatusTone.INFO
+	NoticeTone.Success -> StatusTone.SUCCESS
+	NoticeTone.Error -> StatusTone.ERROR
 }
 
 internal fun ThemeMode.toKmpThemeMode(): KmpThemeMode = when (this) {
@@ -80,4 +89,19 @@ internal fun KmpThemeMode.toStudioThemeMode(): ThemeMode = when (this) {
 	KmpThemeMode.SYSTEM -> ThemeMode.System
 	KmpThemeMode.LIGHT -> ThemeMode.Light
 	KmpThemeMode.DARK -> ThemeMode.Dark
+}
+
+@Composable internal fun AboutDialog(connection: ConnectionState, onDismiss: () -> Unit) {
+	val amoo = when (connection) {
+		is ConnectionState.Ready -> "Amoo ${connection.version} · Studio protocol ${connection.protocolVersion}"
+		ConnectionState.Starting -> "Amoo is starting"
+		is ConnectionState.Unavailable -> "Amoo is not connected"
+	}
+	ThemeDialog(
+		title = "Amoo Studio",
+		text = "Version ${StudioBuildInfo.VERSION}\n$amoo",
+		confirmText = "Close",
+		onConfirm = onDismiss,
+		onDismissRequest = onDismiss,
+	)
 }

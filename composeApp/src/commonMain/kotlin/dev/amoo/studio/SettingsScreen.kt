@@ -66,7 +66,7 @@ import io.github.maniramezan.kmpcomponents.kmpSpacing
 
 @Composable private fun ProviderCard(profile: ProviderProfile, state: StudioState, onEvent: (StudioEvent) -> Unit) {
 	SelectableCard(profile.id == state.selectedProviderId, { onEvent(StudioEvent.SelectProvider(profile.id)) }, Modifier.fillMaxWidth()) {
-		SectionHeader(profile.name, subtitle = "${profile.kind.label} · ${profile.model}", titleStyle = MaterialTheme.typography.titleMedium)
+		SectionHeader(profile.name, subtitle = "${profile.kind.label} · ${profile.model.ifBlank { "model not set" }}", titleStyle = MaterialTheme.typography.titleMedium)
 		val credential = when {
 			!profile.apiKey.isBlank -> "API key ${profile.apiKey.hint} · " + when {
 				profile.id in state.providerApiKeysSaving -> "saving to keychain"

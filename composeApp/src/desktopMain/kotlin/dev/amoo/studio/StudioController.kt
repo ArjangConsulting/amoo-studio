@@ -136,6 +136,7 @@ internal class StudioController(
 	private val providerStore = ProviderStore(preferences, keychain, json)
 	private val chatHistory = ChatHistoryStore(chatHistoryFile, json, preferences)
 	val initialWindowSize: WindowSize? = studioPreferences.windowSize()
+	val initialWindowOrigin: WindowOrigin? = studioPreferences.windowOrigin()
 	val state = MutableStateFlow(initialState())
 	val screenshotLoader: ScreenshotLoader = DesktopScreenshotLoader()
 
@@ -264,7 +265,7 @@ internal class StudioController(
 		if (!state.value.connection.supports(TOOLS_CATALOG_CAPABILITY)) return
 		runCatching { json.decodeFromJsonElement<ToolCatalog>(call("tools.catalog")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.ToolCatalogLoaded(it)) }
-			.onFailure { state.value = state.value.copy(notice = "Could not load Amoo's tool catalog; the console uses its basic commands: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not load Amoo's tool catalog; the console uses its basic commands: ${it.message}", NoticeTone.Error)) }
 	}
 
 	fun onEvent(event: StudioEvent) {
@@ -340,7 +341,7 @@ internal class StudioController(
 		if (!requireCapability("devices.list")) return@launch
 		runCatching { json.decodeFromJsonElement<DeviceListResult>(call("devices.list")) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.DevicesLoaded(it.devices)) }
-			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = "Device discovery failed: ${it.message}") }
+			.onFailure { state.value = state.value.copy(deviceOperation = DeviceOperation.Idle, notice = Notice.error("Device discovery failed: ${it.message}")) }
 	}
 
 	private fun refreshReports() = scope.launch {
@@ -359,7 +360,7 @@ internal class StudioController(
 			require(file.isFile) { "Artifact no longer exists: $path" }
 			require(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) { "Opening files is unsupported on this desktop" }
 			Desktop.getDesktop().open(file)
-		}.onFailure { state.value = state.value.copy(notice = it.message ?: "Could not open artifact") }
+		}.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice(it.message ?: "Could not open artifact", NoticeTone.Error)) }
 	}
 
 	private fun chooseProjectPath() {
@@ -416,7 +417,7 @@ internal class StudioController(
 		val file = filePicker.chooseFileToOpen("Open Amoo test", "*.amootest") ?: return
 		runCatching { testFileStore.load(file) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.TestLoaded(it, file.absolutePath)) }
-			.onFailure { state.value = state.value.copy(notice = "Could not open test: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not open test: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun saveTest(forcePicker: Boolean) {
@@ -426,12 +427,12 @@ internal class StudioController(
 		if (file.extension.lowercase() != "amootest") file = File(file.parentFile, "${file.name}.amootest")
 		runCatching { testFileStore.save(state.value.test, file) }
 			.onSuccess { state.value = state.value.reduce(StudioEvent.TestSaved(file.absolutePath)) }
-			.onFailure { state.value = state.value.copy(notice = "Could not save test: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not save test: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun copyMcpConfiguration() {
 		val executable = runCatching { host.locateAmoo() }.getOrElse {
-			state.value = state.value.copy(notice = "Could not locate Amoo: ${it.message}")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Could not locate Amoo: ${it.message}", NoticeTone.Error))
 			return
 		}
 		val configuration = """
@@ -445,13 +446,13 @@ internal class StudioController(
 			}
 		""".trimIndent()
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(configuration), null)
-		state.value = state.value.copy(notice = "MCP configuration copied")
+		state.value = state.value.reduce(StudioEvent.ShowNotice("MCP configuration copied", NoticeTone.Success))
 	}
 
 	private fun copyInstallCommands() {
 		val commands = "$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND"
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(commands), null)
-		state.value = state.value.copy(notice = "Install commands copied")
+		state.value = state.value.reduce(StudioEvent.ShowNotice("Install commands copied", NoticeTone.Success))
 	}
 
 	private fun installAmoo() {
@@ -506,7 +507,7 @@ internal class StudioController(
 	private fun sendChat() {
 		val readiness = state.value.agentReadiness()
 		if (readiness is SessionReadiness.NoApp) {
-			state.value = state.value.copy(notice = "Set the app's bundle or application ID in Devices so the agent can launch ${readiness.device.name}'s app")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Set the app's bundle or application ID in Devices so the agent can launch ${readiness.device.name}'s app", NoticeTone.Error))
 			return
 		}
 		if (readiness is SessionReadiness.Ready) {
@@ -517,12 +518,12 @@ internal class StudioController(
 		val snapshot = state.value
 		val input = snapshot.chat.input.trim()
 		val provider = snapshot.providers.firstOrNull { it.id == snapshot.selectedProviderId } ?: run {
-			state.value = state.value.copy(notice = "Choose an AI provider before sending a message")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Choose an AI provider before sending a message", NoticeTone.Error))
 			return
 		}
 		if (input.isEmpty() || chatJob?.isActive == true) return
-		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
-			state.value = state.value.copy(notice = problem)
+		snapshot.connection.providerProblem(provider)?.let { problem ->
+			state.value = state.value.reduce(StudioEvent.ShowNotice(problem, NoticeTone.Error))
 			return
 		}
 		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
@@ -551,11 +552,11 @@ internal class StudioController(
 		val input = snapshot.chat.input.trim()
 		if (input.isEmpty() || snapshot.agentRunActive) return
 		val provider = snapshot.providers.firstOrNull { it.id == snapshot.selectedProviderId } ?: run {
-			state.value = state.value.copy(notice = "Choose an AI provider before starting an agent run")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Choose an AI provider before starting an agent run", NoticeTone.Error))
 			return
 		}
-		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
-			state.value = state.value.copy(notice = problem)
+		snapshot.connection.providerProblem(provider)?.let { problem ->
+			state.value = state.value.reduce(StudioEvent.ShowNotice(problem, NoticeTone.Error))
 			return
 		}
 		val userMessage = ChatMessage("user-${System.nanoTime()}", ChatRole.User, input)
@@ -621,14 +622,14 @@ internal class StudioController(
 
 	private fun answerAgentApproval(action: ApprovedAction.AgentTool, approved: Boolean) = scope.launch {
 		runCatching { call("agent.approve", buildJsonObject { put("runId", action.runId); put("callId", action.callId); put("approved", approved) }, context = "runId=${action.runId}") }
-			.onFailure { state.value = state.value.copy(notice = "Could not answer the approval: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not answer the approval: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun cancelAgentRun() {
 		val runId = state.value.agentRun?.takeIf { !it.status.isTerminal }?.runId ?: return
 		scope.launch {
 			runCatching { call("agent.cancel", buildJsonObject { put("runId", runId) }, context = "runId=$runId") }
-				.onFailure { state.value = state.value.copy(notice = "Could not stop the agent: ${it.message}") }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not stop the agent: ${it.message}", NoticeTone.Error)) }
 		}
 	}
 
@@ -640,7 +641,7 @@ internal class StudioController(
 		scope.launch {
 			runCatching { call("agent.continue", buildJsonObject { put("runId", runId); put("message", text) }, context = "runId=$runId") }
 				.onSuccess { state.value = state.value.reduce(StudioEvent.AgentSteered(message)); persistChatMessages() }
-				.onFailure { state.value = state.value.copy(notice = "Could not send guidance: ${it.message}") }
+				.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not send guidance: ${it.message}", NoticeTone.Error)) }
 		}
 	}
 
@@ -675,20 +676,20 @@ internal class StudioController(
 		val generated = state.value.generatedTest?.generated ?: return
 		val file = filePicker.chooseFileToSave("Save generated test", generated.fileName) ?: return
 		runCatching { writeAtomically(file, generated.source) }
-			.onSuccess { state.value = state.value.copy(notice = "Saved ${file.name}") }
-			.onFailure { state.value = state.value.copy(notice = "Could not write file: ${it.message}") }
+			.onSuccess { state.value = state.value.reduce(StudioEvent.ShowNotice("Saved ${file.name}", NoticeTone.Success)) }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not write file: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun copyToClipboard(text: String, notice: String) {
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
-		state.value = state.value.copy(notice = notice)
+		state.value = state.value.reduce(StudioEvent.ShowNotice(notice, NoticeTone.Success))
 	}
 
 	private fun checkProvider(id: String) {
 		if (!requireCapability("providers.check")) return
 		val snapshot = state.value
 		val provider = snapshot.providers.firstOrNull { it.id == id } ?: return
-		snapshot.connection.providerCredentialProblem(provider)?.let { problem ->
+		snapshot.connection.providerProblem(provider)?.let { problem ->
 			state.value = state.value.reduce(StudioEvent.ProviderCheckFailed(id, problem))
 			return
 		}
@@ -706,7 +707,7 @@ internal class StudioController(
 		if (command.isEmpty() || consoleJob?.isActive == true) return
 		// Fast feedback only: Amoo's repl.execute applies the same grammar and refuses destructive tools.
 		ReplGrammar(snapshot.toolCatalog).parse(command).diagnostics.firstOrNull { it.severity == ReplSeverity.Error }?.let {
-			state.value = state.value.copy(notice = it.message)
+			state.value = state.value.reduce(StudioEvent.ShowNotice(it.message, NoticeTone.Error))
 			return
 		}
 		state.value = state.value.reduce(StudioEvent.ConsoleCommandStarted)
@@ -755,7 +756,7 @@ internal class StudioController(
 		if (!requireCapability("tests.run")) return
 		val snapshot = state.value
 		val deviceId = snapshot.selectedDeviceId ?: run {
-			state.value = state.value.copy(notice = "Choose a device before running the test")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Choose a device before running the test", NoticeTone.Error))
 			return
 		}
 		if (testRunJob?.isActive == true) return
@@ -797,7 +798,7 @@ internal class StudioController(
 						TestRunState.Running -> Unit
 						TestRunState.Passed -> { state.value = state.value.reduce(StudioEvent.TestRunFinished(status.message, status.sessionId, status.reportId)); break }
 						TestRunState.Failed -> { state.value = state.value.reduce(StudioEvent.TestRunFailed(status.message)); break }
-						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = status.message); break }
+						TestRunState.Cancelled -> { state.value = state.value.copy(testExecution = TestExecution.Idle, notice = Notice.info(status.message)); break }
 					}
 				}
 				pushedRunStatuses.update { it - started.runId }
@@ -834,7 +835,7 @@ internal class StudioController(
 		val snapshot = state.value
 		if (snapshot.testExportInProgress) return
 		if (snapshot.test.compiledPlan?.toolOperations.isNullOrEmpty()) {
-			state.value = state.value.copy(notice = "Add at least one action before exporting a test")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Add at least one action before exporting a test", NoticeTone.Error))
 			return
 		}
 		state.value = state.value.reduce(StudioEvent.TestExportStarted)
@@ -862,7 +863,7 @@ internal class StudioController(
 		state.value = state.value.reduce(StudioEvent.ProviderApiKeysLoaded(result.keys, result.failures.mapValues { it.value.credentialStorageMessage() }))
 		if (result.failures.isNotEmpty()) {
 			val names = profiles.filter { it.id in result.failures }.joinToString { it.name }
-			state.value = state.value.copy(notice = "Could not read API keys for $names. ${result.failures.values.first().credentialStorageMessage()}")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Could not read API keys for $names. ${result.failures.values.first().credentialStorageMessage()}", NoticeTone.Error))
 		}
 	}
 
@@ -870,25 +871,25 @@ internal class StudioController(
 		runCatching { chatHistory.save(state.value.chat.messages) }
 			.onFailure {
 				log.error("chat.persist", it)
-				state.value = state.value.copy(notice = "Could not save conversation: ${it.message}")
+				state.value = state.value.reduce(StudioEvent.ShowNotice("Could not save conversation: ${it.message}", NoticeTone.Error))
 			}
 	}
 
 	private fun persistThemeMode(themeMode: ThemeMode) {
 		runCatching { studioPreferences.saveThemeMode(themeMode) }
-			.onFailure { state.value = state.value.copy(notice = "Could not save appearance: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not save appearance: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun revealLogs() {
 		val directory = StudioLog.directory
 		if (directory == null || !directory.isDirectory) {
-			state.value = state.value.copy(notice = "Studio has no log folder on this machine")
+			state.value = state.value.reduce(StudioEvent.ShowNotice("Studio has no log folder on this machine", NoticeTone.Error))
 			return
 		}
 		runCatching {
 			require(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) { "Opening folders is unsupported on this desktop" }
 			Desktop.getDesktop().open(directory)
-		}.onFailure { state.value = state.value.copy(notice = "Could not open the log folder: ${it.message}") }
+		}.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not open the log folder: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun saveProvider(profile: ProviderProfile) {
@@ -922,14 +923,14 @@ internal class StudioController(
 
 	private fun persistProfiles() {
 		runCatching { providerStore.saveProfiles(state.value.providers) }
-			.onFailure { state.value = state.value.copy(notice = "Could not save providers: ${it.message}") }
+			.onFailure { state.value = state.value.reduce(StudioEvent.ShowNotice("Could not save providers: ${it.message}", NoticeTone.Error)) }
 	}
 
 	private fun requireCapability(capability: String): Boolean {
 		if (state.value.connection.supports(capability)) return true
 		state.value = state.value.copy(
 			deviceOperation = DeviceOperation.Idle,
-			notice = "The connected Amoo version does not support $capability",
+			notice = Notice.error("The connected Amoo version does not support $capability"),
 		)
 		return false
 	}
@@ -952,8 +953,11 @@ internal class StudioController(
 		}
 	}
 
-	fun persistWindowSize(size: WindowSize) {
-		runCatching { studioPreferences.saveWindowSize(size) }.onFailure { log.error("window.persist", it) }
+	fun persistWindowBounds(origin: WindowOrigin?, size: WindowSize) {
+		runCatching {
+			studioPreferences.saveWindowSize(size)
+			origin?.let(studioPreferences::saveWindowOrigin)
+		}.onFailure { log.error("window.persist", it) }
 	}
 
 	override fun close() { chatJob?.cancel(); consoleJob?.cancel(); testRunJob?.cancel(); agentWatchJob?.cancel(); generateJob?.cancel(); mirror.close(); rpc.close() }

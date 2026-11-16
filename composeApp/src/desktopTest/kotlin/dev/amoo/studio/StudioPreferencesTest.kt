@@ -50,4 +50,13 @@ class StudioPreferencesTest {
 
 		assertNull(preferences.windowSize())
 	}
+
+	@Test
+	fun `the window origin round-trips and is absent until saved`() {
+		assertNull(preferences.windowOrigin())
+
+		preferences.saveWindowOrigin(WindowOrigin(-1200, 40))
+
+		assertEquals(WindowOrigin(-1200, 40), preferences.windowOrigin())
+	}
 }

@@ -9,6 +9,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import java.awt.GraphicsEnvironment
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.window.WindowPosition
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.amoo.composeapp.generated.resources.Res
@@ -121,18 +125,27 @@ fun main() {
 			onDispose(controller::close)
 		}
 		val state by controller.state.collectAsState()
+		val timestampFormatter = remember { DesktopTimestampFormatter() }
+		val initialSize = WindowSize(controller.initialWindowSize?.width ?: DEFAULT_WINDOW_WIDTH, controller.initialWindowSize?.height ?: DEFAULT_WINDOW_HEIGHT)
+		val reachableOrigin = controller.initialWindowOrigin?.takeIf { origin ->
+			isReachable(origin, initialSize, GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { it.defaultConfiguration.bounds })
+		}
 		val windowState = rememberWindowState(
-			width = (controller.initialWindowSize?.width ?: DEFAULT_WINDOW_WIDTH).dp,
-			height = (controller.initialWindowSize?.height ?: DEFAULT_WINDOW_HEIGHT).dp,
+			position = reachableOrigin?.let { WindowPosition(it.x.dp, it.y.dp) } ?: WindowPosition.PlatformDefault,
+			width = initialSize.width.dp,
+			height = initialSize.height.dp,
 		)
 		LaunchedEffect(state.exitRequested) {
 			if (state.exitRequested) exitApplication()
 		}
 		LaunchedEffect(windowState) {
-			snapshotFlow { windowState.size }
+			snapshotFlow { windowState.position to windowState.size }
 				.drop(1)
 				.debounce(500)
-				.collect { size -> controller.persistWindowSize(WindowSize(size.width.value.roundToInt(), size.height.value.roundToInt())) }
+				.collect { (position, size) ->
+					val origin = position.takeIf { it.isSpecified }?.let { WindowOrigin(it.x.value.roundToInt(), it.y.value.roundToInt()) }
+					controller.persistWindowBounds(origin, WindowSize(size.width.value.roundToInt(), size.height.value.roundToInt()))
+				}
 		}
 		Window(
 			onCloseRequest = { controller.onEvent(StudioEvent.RequestQuit) },
@@ -140,11 +153,25 @@ fun main() {
 			icon = painterResource(Res.drawable.icon_512),
 			state = windowState,
 		) {
+			MenuBar {
+				val macOS = detectHostPlatform() == HostPlatform.MacOS
+				studioMenus().forEach { group ->
+					Menu(group.title) {
+						group.commands.forEach { command ->
+							Item(command.title, shortcut = command.shortcut?.toKeyShortcut(macOS), onClick = { controller.onEvent(command.event) })
+						}
+					}
+				}
+			}
 			LaunchedEffect(Unit) {
 				installDockIcon()
 				window.minimumSize = Dimension(StudioPreferences.MIN_WINDOW_WIDTH, StudioPreferences.MIN_WINDOW_HEIGHT)
 			}
-			CompositionLocalProvider(LocalScreenshotLoader provides controller.screenshotLoader, LocalReplAssist provides controller.replAssist) {
+			CompositionLocalProvider(
+				LocalScreenshotLoader provides controller.screenshotLoader,
+				LocalReplAssist provides controller.replAssist,
+				LocalTimestampFormatter provides timestampFormatter,
+			) {
 				AmooStudioApp(state, controller::onEvent)
 			}
 		}

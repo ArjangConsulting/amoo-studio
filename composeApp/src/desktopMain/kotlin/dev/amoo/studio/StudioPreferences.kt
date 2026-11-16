@@ -58,6 +58,17 @@ internal class StudioPreferences(private val preferences: Preferences) {
 		preferences.putInt(WINDOW_HEIGHT, size.height)
 	}
 
+	fun windowOrigin(): WindowOrigin? {
+		val x = preferences.getInt(WINDOW_X, UNSET)
+		val y = preferences.getInt(WINDOW_Y, UNSET)
+		return if (x != UNSET && y != UNSET) WindowOrigin(x, y) else null
+	}
+
+	fun saveWindowOrigin(origin: WindowOrigin) {
+		preferences.putInt(WINDOW_X, origin.x)
+		preferences.putInt(WINDOW_Y, origin.y)
+	}
+
 	companion object {
 		const val MIN_WINDOW_WIDTH = 800
 		const val MIN_WINDOW_HEIGHT = 560
@@ -70,5 +81,8 @@ internal class StudioPreferences(private val preferences: Preferences) {
 		private const val WORKBENCH_SPLIT = "workbenchSplit"
 		private const val WINDOW_WIDTH = "windowWidth"
 		private const val WINDOW_HEIGHT = "windowHeight"
+		private const val WINDOW_X = "windowX"
+		private const val WINDOW_Y = "windowY"
+		private const val UNSET = Int.MIN_VALUE
 	}
 }

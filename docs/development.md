@@ -53,6 +53,7 @@ the `PATH` lookup:
 
 ```bash
 brew tap arjangconsulting/tap
+brew trust arjangconsulting/tap
 brew install amoo
 ```
 

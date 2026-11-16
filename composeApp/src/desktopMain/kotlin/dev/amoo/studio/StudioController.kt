@@ -452,7 +452,7 @@ internal class StudioController(
 	}
 
 	private fun copyInstallCommands() {
-		val commands = "$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND"
+		val commands = "$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_TRUST_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND"
 		Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(commands), null)
 		state.value = state.value.reduce(StudioEvent.ShowNotice("Install commands copied", NoticeTone.Success))
 	}
@@ -464,6 +464,9 @@ internal class StudioController(
 			val result = runCatching {
 				val brew = host.locateHomebrew()
 				runShellCommand(listOf(brew, "tap", AMOO_HOMEBREW_TAP))
+				// Older Homebrew has no trust command and loads tapped formulae freely, so a failure here is not fatal.
+				runCatching { runShellCommand(listOf(brew, "trust", AMOO_HOMEBREW_TAP)) }
+					.onFailure { log.warn("install.trust", "brew trust failed: ${it.message}") }
 				runShellCommand(listOf(brew, "install", AMOO_HOMEBREW_FORMULA))
 			}
 			withContext(mainDispatcher) {

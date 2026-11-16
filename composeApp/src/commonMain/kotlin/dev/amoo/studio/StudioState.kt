@@ -280,6 +280,8 @@ enum class DiscardContinuation { NewTest, OpenTest, Quit }
 const val AMOO_HOMEBREW_TAP = "arjangconsulting/tap"
 const val AMOO_HOMEBREW_FORMULA = "amoo"
 const val AMOO_HOMEBREW_TAP_COMMAND = "brew tap $AMOO_HOMEBREW_TAP"
+/** Homebrew 7 refuses to load formulae from a tap until it is trusted; older Homebrew has no such command. */
+const val AMOO_HOMEBREW_TRUST_COMMAND = "brew trust $AMOO_HOMEBREW_TAP"
 const val AMOO_HOMEBREW_INSTALL_COMMAND = "brew install $AMOO_HOMEBREW_FORMULA"
 
 /** An unread existing key must not be interpreted as an empty key and deleted by a form save. */
@@ -481,7 +483,7 @@ private fun StudioState.reduceEvent(event: StudioEvent): StudioState = when (eve
 	StudioEvent.RetryConnection -> copy(connection = ConnectionState.Starting, notice = null)
 	StudioEvent.RequestInstallAmoo -> copy(pendingApproval = PendingApproval(
 		"Install Amoo via Homebrew?",
-		"Studio will run:\n$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND",
+		"Studio will run:\n$AMOO_HOMEBREW_TAP_COMMAND\n$AMOO_HOMEBREW_TRUST_COMMAND\n$AMOO_HOMEBREW_INSTALL_COMMAND",
 		ApprovedAction.InstallAmoo,
 		confirmLabel = "Install",
 	))

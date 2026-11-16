@@ -54,6 +54,7 @@ Alternatively, install a released `amoo` build via Homebrew and let Studio find 
 
 ```bash
 brew tap arjangconsulting/tap
+brew trust arjangconsulting/tap
 brew install amoo
 ./gradlew -PuseLocalCodeEditor=true :composeApp:run
 ```

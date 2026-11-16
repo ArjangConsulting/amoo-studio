@@ -37,6 +37,7 @@ class StudioStateTest {
 		assertEquals(ApprovedAction.InstallAmoo, approval.action)
 		assertEquals("Install", approval.confirmLabel)
 		assertTrue(approval.message.contains(AMOO_HOMEBREW_TAP_COMMAND))
+		assertTrue(approval.message.contains(AMOO_HOMEBREW_TRUST_COMMAND))
 		assertTrue(approval.message.contains(AMOO_HOMEBREW_INSTALL_COMMAND))
 	}
 

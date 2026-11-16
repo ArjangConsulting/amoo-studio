@@ -49,6 +49,7 @@ jobs:
       - name: Install Amoo
         run: |
           brew tap arjangconsulting/tap
+          brew trust arjangconsulting/tap
           brew install amoo
       - name: Exercise the real studio protocol
         run: python3 scripts/studio-protocol-smoke.py --amoo "$(brew --prefix)/bin/amoo"

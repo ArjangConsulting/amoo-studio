@@ -121,7 +121,7 @@ compose.desktop {
 			}
 			linux {
 				iconFile.set(project.file("app-resources/icons/icon_512.png"))
-				debMaintainer = "Amoo Studio <noreply@github.com>"
+				debMaintainer = "Amoo Studio <mani@arjangconsulting.com>"
 				menuGroup = "Development"
 				appCategory = "Development"
 				shortcut = true
